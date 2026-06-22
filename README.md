@@ -17,11 +17,7 @@
 
 ## AstrBot 安装
 
-推荐直接上传已经整理好的压缩包：
-
-```text
-dist/astrbot_plugin_lexue_attention.zip
-```
+从 GitHub 下载或克隆本项目后，将整个项目目录打包为 zip，再在 AstrBot 插件页上传安装。
 
 从旧版本升级时，建议先在 AstrBot 插件页卸载旧插件，或删除旧目录后再上传新版，避免旧文件残留：
 
@@ -31,7 +27,13 @@ data/plugins/astrbot_plugin_lexue_attention
 
 插件运行状态保存在 `data/plugin_data/astrbot_plugin_lexue_attention/state.json`，删除插件代码目录不会删除 DDL 状态。
 
-压缩包内必须只有一个顶层目录：
+压缩包内必须只有一个顶层目录，顶层目录名建议保持为：
+
+```text
+astrbot_plugin_lexue_attention
+```
+
+正确的 zip 内部结构应类似：
 
 ```text
 astrbot_plugin_lexue_attention/
@@ -51,7 +53,7 @@ astrbot_plugin_lexue_attention
 复制到 AstrBot 的插件目录后，重载或重启 AstrBot：
 
 ```powershell
-Copy-Item -Recurse E:\for_github_work\lexue-attention <AstrBot>\data\plugins\astrbot_plugin_lexue_attention
+Copy-Item -Recurse .\astrbot_plugin_lexue_attention <AstrBot>\data\plugins\astrbot_plugin_lexue_attention
 ```
 
 ## 快速配置
@@ -202,7 +204,7 @@ Copy-Item -Recurse E:\for_github_work\lexue-attention <AstrBot>\data\plugins\ast
 
 1. 在 AstrBot 插件页卸载旧插件。
 2. 确认旧插件代码目录已删除：`data/plugins/astrbot_plugin_lexue_attention`。
-3. 重新上传 `dist/astrbot_plugin_lexue_attention.zip`。
+3. 重新将整个项目目录打包为 zip，并上传到 AstrBot。
 4. 重启或重载 AstrBot。
 
 新版已删除黑名单和白名单机制，改用 AstrBot 管理员权限过滤。升级时仍建议清掉旧代码目录。
