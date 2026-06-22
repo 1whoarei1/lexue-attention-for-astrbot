@@ -445,7 +445,7 @@ class LexueAttentionPlugin(Star):
             f"每日推送：{'开启' if config.enable_daily_push else '关闭'} {config.daily_push_time}",
             f"自动同步：{'开启' if config.enable_interval_sync else '关闭'} {config.check_interval_minutes} 分钟",
             f"图片卡片：{'开启' if config.enable_image_mode else '关闭'}",
-            f"文转图服务器：{_format_t2i_endpoint(config.t2i_endpoint)}",
+            f"文转图服务器：{_format_t2i_endpoint(_config_t2i_endpoint(config))}",
             f"图片渲染冷却：{self._format_image_cooldown()}",
             f"最近错误：{self._last_error or '无'}",
         ]
@@ -484,7 +484,7 @@ class LexueAttentionPlugin(Star):
         try:
             context = build_ddl_card_context(events, now, title=title, limit=limit)
             config = self._plugin_config()
-            image_url = await self._render_html_to_image(DDL_CARD_TEMPLATE, context, config.t2i_endpoint)
+            image_url = await self._render_html_to_image(DDL_CARD_TEMPLATE, context, _config_t2i_endpoint(config))
             self._image_render_disabled_until = None
             return image_url
         except Exception as exc:
@@ -727,6 +727,10 @@ def _config_get(config: Any, key: str, default: Any = None) -> Any:
     if hasattr(config, "get"):
         return config.get(key, default)
     return default
+
+
+def _config_t2i_endpoint(config: Any) -> str:
+    return str(getattr(config, "t2i_endpoint", DEFAULT_T2I_ENDPOINT) or DEFAULT_T2I_ENDPOINT)
 
 
 def _normalize_t2i_endpoint(value: str) -> str:
