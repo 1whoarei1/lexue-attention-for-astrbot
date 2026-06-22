@@ -15,6 +15,9 @@
 - 所有 `/lexue` 命令仅 AstrBot 管理员可用，非管理员发送时不会触发乐学回复。
 - 提供命令行工具：获取 DDL、同步状态、登录诊断。
 
+## 效果展示
+![alt text](image/image.png)
+
 ## AstrBot 安装
 
 从 GitHub 下载或克隆本项目后，将整个项目目录打包为 zip，再在 AstrBot 插件页上传安装。
