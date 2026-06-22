@@ -58,9 +58,16 @@ Copy-Item -Recurse .\astrbot_plugin_lexue_attention <AstrBot>\data\plugins\astrb
 
 ## 快速配置
 
-推荐优先使用乐学 iCalendar 订阅地址，这样不需要在插件里保存统一认证密码。
-
 在你希望机器人推送 DDL 的群聊或私聊中依次发送：
+
+```text
+/lexue bind
+/lexue account <学号> <统一认证密码>
+/lexue daily 08:30
+/lexue interval 60
+/lexue sync
+```
+或者使用日历订阅地址（未得到验证的方式）
 
 ```text
 /lexue bind
@@ -70,15 +77,6 @@ Copy-Item -Recurse .\astrbot_plugin_lexue_attention <AstrBot>\data\plugins\astrb
 /lexue fetch
 ```
 
-如果暂时没有日历订阅地址，也可以使用统一认证账号密码：
-
-```text
-/lexue bind
-/lexue account <学号> <统一认证密码>
-/lexue daily 08:30
-/lexue interval 60
-/lexue sync
-```
 
 ## 主动推送怎么设置
 
@@ -128,7 +126,7 @@ Copy-Item -Recurse .\astrbot_plugin_lexue_attention <AstrBot>\data\plugins\astrb
 
 ## 管理员权限
 
-插件命令使用 AstrBot 的管理员权限过滤器。只有 AstrBot 管理员发送的 `/lexue ...` 命令会触发插件处理；其它用户发送相同命令时，不会返回乐学相关信息。
+插件命令默认使用 AstrBot 的管理员权限过滤器。只有 AstrBot 管理员发送的 `/lexue ...` 命令会触发插件处理；其它用户发送相同命令时，不会返回乐学相关信息。
 
 管理员身份在 AstrBot 本身配置，不在本插件里单独维护。设置管理员后，再由管理员执行：
 
