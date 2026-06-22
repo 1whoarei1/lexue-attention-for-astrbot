@@ -7,6 +7,7 @@ from typing import Any
 import requests
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
+from astrbot.api import message_components as Comp
 from astrbot.api.star import Context, Star, register
 from astrbot.core.star.filter.command import GreedyStr
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
@@ -18,7 +19,6 @@ if _SRC_PATH.exists() and str(_SRC_PATH) not in sys.path:
 
 from lexue_attention.astrbot_adapter import (
     format_event_list,
-    format_sync_notifications,
     format_sync_summary,
     is_same_minute,
     normalize_plugin_config,
@@ -30,7 +30,7 @@ from lexue_attention.core import fetch_events, sync_events
 PLUGIN_NAME = "astrbot_plugin_lexue_attention"
 PLUGIN_AUTHOR = "lexue-attention"
 PLUGIN_DESC = "BIT 乐学 DDL 查询、同步和定时提醒插件。"
-PLUGIN_VERSION = "1.2.0"
+PLUGIN_VERSION = "1.3.0"
 
 
 @filter.command_group("lexue", alias={"乐学", "ddl"})
@@ -140,17 +140,40 @@ class LexueAttentionPlugin(Star):
             return
 
         now = datetime.now(config.timezone)
-        yield event.plain_result(format_event_list(events, now, title="当前 DDL", limit=config.max_events))
+        text = format_event_list(events, now, title="当前 DDL", limit=config.max_events)
+        image_url = await self._render_event_image(
+            events,
+            now,
+            title="当前 DDL",
+            limit=config.max_events,
+            enabled=getattr(config, "enable_image_mode", True),
+        )
+        if image_url:
+            yield event.image_result(image_url)
+            return
+        yield event.plain_result(text)
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @lexue.command("sync", alias={"同步", "更新"})
     async def sync_ddl(self, event: AstrMessageEvent):
         """主动同步 DDL，更新本地状态并发送新增、变更和提醒。"""
         try:
-            text = await self._sync_once(force_summary=True)
+            config, now, result = await self._run_sync()
         except Exception as exc:
             logger.exception("lexue-attention manual sync failed")
             yield event.plain_result(f"同步 DDL 失败：{_format_error(exc)}")
+            return
+
+        text = format_sync_summary(result, now, max_events=config.max_events)
+        image_url = await self._render_event_image(
+            result.events,
+            now,
+            title="同步完成",
+            limit=config.max_events,
+            enabled=getattr(config, "enable_image_mode", True),
+        )
+        if image_url:
+            yield event.image_result(image_url)
             return
         yield event.plain_result(text)
 
@@ -168,11 +191,12 @@ class LexueAttentionPlugin(Star):
             f"主动推送会话：{'已绑定' if push_session else '未绑定'}",
             f"每日推送：{'开启' if config.enable_daily_push else '关闭'} {config.daily_push_time}",
             f"自动同步：{'开启' if config.enable_interval_sync else '关闭'} {config.check_interval_minutes} 分钟",
+            f"图片卡片：{'开启' if config.enable_image_mode else '关闭'}",
             f"最近错误：{self._last_error or '无'}",
         ]
         yield event.plain_result("\n".join(lines))
 
-    async def _sync_once(self, *, force_summary: bool = False) -> str:
+    async def _run_sync(self):
         config = self._plugin_config()
         validate_fetch_config(config)
         async with self._sync_lock:
@@ -186,21 +210,111 @@ class LexueAttentionPlugin(Star):
             )
 
         self._last_error = ""
-        if force_summary:
-            return format_sync_summary(result, now, max_events=config.max_events)
+        return config, now, result
 
-        messages = format_sync_notifications(result, now, max_events=config.max_events)
-        if not messages:
+    async def _render_event_image(
+        self,
+        events,
+        now: datetime,
+        *,
+        title: str,
+        limit: int,
+        enabled: bool,
+    ) -> str:
+        if not enabled:
             return ""
-        return "\n\n".join(messages)
 
-    async def _send_to_bound_session(self, text: str) -> None:
+        try:
+            from lexue_attention.astrbot_adapter import (
+                DDL_CARD_TEMPLATE,
+                build_ddl_card_context,
+            )
+
+            context = build_ddl_card_context(events, now, title=title, limit=limit)
+            return await self.html_render(
+                DDL_CARD_TEMPLATE,
+                context,
+                options={"type": "png", "full_page": True, "timeout": 10000},
+            )
+        except Exception:
+            logger.exception("lexue-attention render ddl image failed")
+            return ""
+
+    async def _send_to_bound_session(self, text: str = "", image_url: str = "") -> None:
         session = self._push_session()
         if not session:
             return
-        ok = await self.context.send_message(session, MessageChain().message(text))
+        if not text and not image_url:
+            return
+
+        chain = MessageChain()
+        if image_url:
+            if image_url.startswith("http"):
+                chain.chain.append(Comp.Image.fromURL(image_url))
+            else:
+                chain.chain.append(Comp.Image.fromFileSystem(image_url))
+        if text:
+            chain.message(text)
+        ok = await self.context.send_message(session, chain)
         if not ok:
             logger.warning("lexue-attention cannot find platform for session %s", session)
+
+    async def _send_event_list_to_bound_session(
+        self,
+        events,
+        now: datetime,
+        *,
+        title: str,
+        limit: int,
+        enable_image_mode: bool,
+    ) -> None:
+        text = format_event_list(events, now, title=title, limit=limit)
+        image_url = await self._render_event_image(
+            events,
+            now,
+            title=title,
+            limit=limit,
+            enabled=enable_image_mode,
+        )
+        if image_url:
+            await self._send_to_bound_session(image_url=image_url)
+            return
+        await self._send_to_bound_session(text=text)
+
+    async def _send_sync_notifications_to_bound_session(self) -> None:
+        config, now, result = await self._run_sync()
+        sent = False
+        for title, events in (
+            ("新增 DDL", result.new_events),
+            ("变更 DDL", result.changed_events),
+        ):
+            if not events:
+                continue
+            await self._send_event_list_to_bound_session(
+                events,
+                now,
+                title=title,
+                limit=config.max_events,
+                enable_image_mode=getattr(config, "enable_image_mode", True),
+            )
+            sent = True
+
+        for reminder in result.reminders:
+            image_url = await self._render_event_image(
+                [reminder.event],
+                now,
+                title="DDL 提醒",
+                limit=1,
+                enabled=getattr(config, "enable_image_mode", True),
+            )
+            if image_url:
+                await self._send_to_bound_session(image_url=image_url)
+            else:
+                await self._send_to_bound_session(text="DDL 提醒\n" + reminder.text)
+            sent = True
+
+        if not sent:
+            return
 
     async def _interval_loop(self) -> None:
         while True:
@@ -210,9 +324,7 @@ class LexueAttentionPlugin(Star):
             if not session or not config.enable_interval_sync:
                 continue
             try:
-                text = await self._sync_once()
-                if text:
-                    await self._send_to_bound_session(text)
+                await self._send_sync_notifications_to_bound_session()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -236,8 +348,13 @@ class LexueAttentionPlugin(Star):
                     continue
                 self._last_daily_key = current_key
                 events = await asyncio.to_thread(fetch_events, config.fetch_options())
-                text = format_event_list(events, now, title="今日 DDL 推送", limit=config.max_events)
-                await self._send_to_bound_session(text)
+                await self._send_event_list_to_bound_session(
+                    events,
+                    now,
+                    title="今日 DDL 推送",
+                    limit=config.max_events,
+                    enable_image_mode=getattr(config, "enable_image_mode", True),
+                )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

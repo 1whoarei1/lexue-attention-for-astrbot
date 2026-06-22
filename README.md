@@ -12,11 +12,9 @@
 - 标准化 DDL 字段：`uid`、`title`、`description`、`course`、`due_at`。
 - 按 UID 保存本地状态，用于识别新增、变更和已提醒记录。
 - 提供 AstrBot 指令：账号设置、日历订阅设置、手动查询、手动同步、定时推送。
+- 支持 HTML 转图的 DDL 图片卡片，用颜色和状态标签突出已过期、马上截止、今日截止和 3 天内任务。
 - 所有 `/lexue` 命令仅 AstrBot 管理员可用，非管理员发送时不会触发乐学回复。
 - 提供命令行工具：获取 DDL、同步状态、登录诊断。
-
-## 效果展示
-![alt text](image/image.png)
 
 ## AstrBot 安装
 
@@ -61,16 +59,9 @@ Copy-Item -Recurse .\astrbot_plugin_lexue_attention <AstrBot>\data\plugins\astrb
 
 ## 快速配置
 
-在你希望机器人推送 DDL 的群聊或私聊中依次发送：
+推荐优先使用乐学 iCalendar 订阅地址，这样不需要在插件里保存统一认证密码。
 
-```text
-/lexue bind
-/lexue account <学号> <统一认证密码>
-/lexue daily 08:30
-/lexue interval 60
-/lexue sync
-```
-或者使用日历订阅地址（未得到验证的方式）
+在你希望机器人推送 DDL 的群聊或私聊中依次发送：
 
 ```text
 /lexue bind
@@ -80,6 +71,15 @@ Copy-Item -Recurse .\astrbot_plugin_lexue_attention <AstrBot>\data\plugins\astrb
 /lexue fetch
 ```
 
+如果暂时没有日历订阅地址，也可以使用统一认证账号密码：
+
+```text
+/lexue bind
+/lexue account <学号> <统一认证密码>
+/lexue daily 08:30
+/lexue interval 60
+/lexue sync
+```
 
 ## 主动推送怎么设置
 
@@ -127,9 +127,29 @@ Copy-Item -Recurse .\astrbot_plugin_lexue_attention <AstrBot>\data\plugins\astrb
 自动同步：开启
 ```
 
+## 图片卡片模式
+
+插件默认开启图片卡片模式。`/lexue fetch`、`/lexue sync`、每日推送、新增/变更提醒会优先用 AstrBot 的 HTML 转图能力发送 DDL 卡片。
+
+卡片会按截止时间排序，并用不同颜色区分状态：
+
+- 红色：已过期。
+- 橙色：6 小时内截止。
+- 黄色：今日或 24 小时内截止。
+- 蓝色：3 天内截止。
+- 绿色：较远期待办。
+
+如果 AstrBot 的 HTML 转图渲染失败，插件会自动退回纯文本，不影响 DDL 推送。
+
+可以在 AstrBot 插件配置页修改：
+
+```text
+enable_image_mode = true
+```
+
 ## 管理员权限
 
-插件命令默认使用 AstrBot 的管理员权限过滤器。只有 AstrBot 管理员发送的 `/lexue ...` 命令会触发插件处理；其它用户发送相同命令时，不会返回乐学相关信息。
+插件命令使用 AstrBot 的管理员权限过滤器。只有 AstrBot 管理员发送的 `/lexue ...` 命令会触发插件处理；其它用户发送相同命令时，不会返回乐学相关信息。
 
 管理员身份在 AstrBot 本身配置，不在本插件里单独维护。设置管理员后，再由管理员执行：
 
@@ -177,6 +197,7 @@ Copy-Item -Recurse .\astrbot_plugin_lexue_attention <AstrBot>\data\plugins\astrb
 - `enable_daily_push`：是否开启每日推送。
 - `check_interval_minutes`：自动同步间隔分钟数。
 - `enable_interval_sync`：是否开启间隔同步。
+- `enable_image_mode`：是否开启图片卡片模式。渲染失败时会自动回退纯文本。
 - `reminder_milestones_hours`：提前提醒小时数，例如 `[72, 24, 6]`。
 - `max_events`：单次最多展示的 DDL 数量。
 - `timezone`：时区，默认 `Asia/Shanghai`。

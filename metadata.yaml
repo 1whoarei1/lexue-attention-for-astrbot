@@ -2,6 +2,6 @@ name: astrbot_plugin_lexue_attention
 display_name: lexue-attention
 desc: BIT 乐学 DDL 查询、同步和定时提醒插件。
 short_desc: 获取 BIT 乐学 DDL，并支持定时推送与提醒。
-version: v1.2.0
+version: v1.3.0
 author: lexue-attention
 astrbot_version: ">=4.9.2"

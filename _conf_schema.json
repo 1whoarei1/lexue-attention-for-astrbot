@@ -55,6 +55,12 @@
     "type": "bool",
     "default": true
   },
+  "enable_image_mode": {
+    "description": "开启图片卡片推送",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后 DDL 列表、每日推送、新增/变更和提醒会优先使用 AstrBot HTML 转图发送；渲染失败时自动退回纯文本。"
+  },
   "reminder_milestones_hours": {
     "description": "提醒提前小时数",
     "type": "list",
