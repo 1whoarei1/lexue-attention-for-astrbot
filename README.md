@@ -139,12 +139,34 @@ Copy-Item -Recurse .\astrbot_plugin_lexue_attention <AstrBot>\data\plugins\astrb
 - 蓝色：3 天内截止。
 - 绿色：较远期待办。
 
-如果 AstrBot 的 HTML 转图渲染失败，插件会自动退回纯文本，不影响 DDL 推送。
+如果 AstrBot 的 HTML 转图渲染失败，插件会自动退回纯文本，不影响 DDL 推送。遇到转图服务 502 等错误后，插件会在 30 分钟内跳过图片渲染，避免日志持续刷屏。
 
 可以在 AstrBot 插件配置页修改：
 
 ```text
 enable_image_mode = true
+t2i_endpoint = official
+```
+
+`t2i_endpoint` 默认是 `official`，表示直接使用 AstrBot 官方文转图服务器。也可以填写自建文转图服务地址，例如：
+
+```text
+t2i_endpoint = http://127.0.0.1:8999
+```
+
+填写自建地址后，插件会直接请求该服务生成 DDL 图片，并把生成的图片保存到 AstrBot 插件数据目录后发送。地址可以写到服务根路径，也可以写到 `/text2img` 路径：
+
+```text
+http://127.0.0.1:8999
+http://127.0.0.1:8999/text2img
+```
+
+如果使用我整理的一键脚本，执行 `~/start_services.sh` 后，本机自建文转图服务地址就是 `http://127.0.0.1:8999`。
+
+如果希望继续走 AstrBot 的全局文转图配置，可以填写：
+
+```text
+t2i_endpoint = astrbot
 ```
 
 ## 管理员权限
@@ -198,6 +220,7 @@ enable_image_mode = true
 - `check_interval_minutes`：自动同步间隔分钟数。
 - `enable_interval_sync`：是否开启间隔同步。
 - `enable_image_mode`：是否开启图片卡片模式。渲染失败时会自动回退纯文本。
+- `t2i_endpoint`：文转图服务器。默认 `official` 使用 AstrBot 官方服务器；自建服务可填写 `http://127.0.0.1:8999`；填写 `astrbot` 则走 AstrBot 全局配置。
 - `reminder_milestones_hours`：提前提醒小时数，例如 `[72, 24, 6]`。
 - `max_events`：单次最多展示的 DDL 数量。
 - `timezone`：时区，默认 `Asia/Shanghai`。
@@ -249,6 +272,16 @@ curl -I https://lexue.bit.edu.cn/
 ```
 
 如果使用 `calendar_url`，插件通常只需要访问乐学日历地址；如果使用账号密码，插件还需要访问 `sso.bit.edu.cn`。
+
+### HTML 转图失败：All endpoints failed: HTTP 502
+
+这是 AstrBot 的 HTML 转图服务不可用，不是乐学数据解析失败。插件会自动回退纯文本，并进入 30 分钟图片渲染冷却。
+
+处理方式：
+
+1. 稍后再试，等待 AstrBot 默认 t2i 服务恢复。
+2. 在插件配置页把 `t2i_endpoint` 改成可用的自建 t2i 服务，例如 `http://127.0.0.1:8999`。
+3. 如果不需要图片卡片，可在插件配置页关闭 `enable_image_mode`。
 
 ## Python 命令行使用
 

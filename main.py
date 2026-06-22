@@ -1,7 +1,8 @@
 import asyncio
 import re
 import sys
-from datetime import datetime
+import uuid
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +32,12 @@ from lexue_attention.core import fetch_events, sync_events
 PLUGIN_NAME = "astrbot_plugin_lexue_attention"
 PLUGIN_AUTHOR = "lexue-attention"
 PLUGIN_DESC = "BIT 乐学 DDL 查询、同步和定时提醒插件。"
-PLUGIN_VERSION = "1.3.1"
+PLUGIN_VERSION = "1.3.3"
+IMAGE_RENDER_COOLDOWN_MINUTES = 30
+CUSTOM_T2I_IMAGE_TTL_DAYS = 7
+DEFAULT_T2I_ENDPOINT = "official"
+OFFICIAL_T2I_ENDPOINT = "https://t2i.soulter.top/text2img"
+ASTRBOT_T2I_ENDPOINT = "astrbot"
 
 DDL_CARD_TEMPLATE = r"""
 <!doctype html>
@@ -294,6 +300,7 @@ class LexueAttentionPlugin(Star):
         self._sync_lock = asyncio.Lock()
         self._last_daily_key = ""
         self._last_error = ""
+        self._image_render_disabled_until: datetime | None = None
 
     async def initialize(self) -> None:
         self._restart_background_tasks()
@@ -438,6 +445,8 @@ class LexueAttentionPlugin(Star):
             f"每日推送：{'开启' if config.enable_daily_push else '关闭'} {config.daily_push_time}",
             f"自动同步：{'开启' if config.enable_interval_sync else '关闭'} {config.check_interval_minutes} 分钟",
             f"图片卡片：{'开启' if config.enable_image_mode else '关闭'}",
+            f"文转图服务器：{_format_t2i_endpoint(config.t2i_endpoint)}",
+            f"图片渲染冷却：{self._format_image_cooldown()}",
             f"最近错误：{self._last_error or '无'}",
         ]
         yield event.plain_result("\n".join(lines))
@@ -469,17 +478,92 @@ class LexueAttentionPlugin(Star):
     ) -> str:
         if not enabled:
             return ""
+        if self._image_render_disabled_until and datetime.now(now.tzinfo) < self._image_render_disabled_until:
+            return ""
 
         try:
             context = build_ddl_card_context(events, now, title=title, limit=limit)
-            return await self.html_render(
-                DDL_CARD_TEMPLATE,
-                context,
-                options={"type": "png", "full_page": True, "timeout": 10000},
+            config = self._plugin_config()
+            image_url = await self._render_html_to_image(DDL_CARD_TEMPLATE, context, config.t2i_endpoint)
+            self._image_render_disabled_until = None
+            return image_url
+        except Exception as exc:
+            self._image_render_disabled_until = datetime.now(now.tzinfo) + timedelta(
+                minutes=IMAGE_RENDER_COOLDOWN_MINUTES
             )
-        except Exception:
-            logger.exception("lexue-attention render ddl image failed")
+            self._last_error = _format_error(exc)
+            logger.warning(
+                "lexue-attention render ddl image failed, fallback to text for %s minutes: %s",
+                IMAGE_RENDER_COOLDOWN_MINUTES,
+                exc,
+            )
             return ""
+
+    async def _render_html_to_image(self, template: str, context: dict[str, Any], t2i_endpoint: str) -> str:
+        endpoint = _normalize_t2i_endpoint(t2i_endpoint)
+        options = {"type": "png", "full_page": True, "timeout": 10000}
+        if endpoint == ASTRBOT_T2I_ENDPOINT:
+            return await self.html_render(template, context, options=options)
+        return await asyncio.to_thread(self._render_with_custom_t2i, endpoint, template, context, options)
+
+    def _render_with_custom_t2i(
+        self,
+        endpoint: str,
+        template: str,
+        context: dict[str, Any],
+        options: dict[str, Any],
+    ) -> str:
+        base_url = endpoint.rstrip("/")
+        payload = {
+            "tmpl": template,
+            "tmpldata": context,
+            "json": False,
+            "options": options,
+        }
+        render_url = f"{base_url}/generate" if base_url.endswith("/text2img") else f"{base_url}/text2img/generate"
+        response = requests.post(
+            render_url,
+            json=payload,
+            timeout=30,
+        )
+        response.raise_for_status()
+
+        content_type = response.headers.get("content-type", "").lower()
+        if "application/json" in content_type:
+            data = response.json()
+            image_url = _image_url_from_t2i_json(base_url, data)
+            if image_url:
+                return self._download_custom_t2i_image(image_url)
+            raise RuntimeError(f"自定义文转图服务返回异常：{data}")
+
+        if not content_type.startswith("image/"):
+            raise RuntimeError(f"自定义文转图服务返回了非图片内容：{content_type or 'unknown'}")
+
+        suffix = ".jpg" if "jpeg" in content_type or "jpg" in content_type else ".png"
+        output_path = self._custom_t2i_image_dir() / f"ddl_card_{uuid.uuid4().hex}{suffix}"
+        output_path.write_bytes(response.content)
+        return str(output_path)
+
+    def _download_custom_t2i_image(self, image_url: str) -> str:
+        response = requests.get(image_url, timeout=30)
+        response.raise_for_status()
+        content_type = response.headers.get("content-type", "").lower()
+        suffix = ".jpg" if "jpeg" in content_type or "jpg" in content_type else ".png"
+        output_path = self._custom_t2i_image_dir() / f"ddl_card_{uuid.uuid4().hex}{suffix}"
+        output_path.write_bytes(response.content)
+        return str(output_path)
+
+    def _custom_t2i_image_dir(self) -> Path:
+        output_dir = Path(get_astrbot_data_path()) / "plugin_data" / PLUGIN_NAME / "rendered_images"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        cutoff = datetime.now().timestamp() - CUSTOM_T2I_IMAGE_TTL_DAYS * 24 * 60 * 60
+        for old_file in output_dir.glob("ddl_card_*"):
+            try:
+                if old_file.is_file() and old_file.stat().st_mtime < cutoff:
+                    old_file.unlink()
+            except OSError:
+                logger.warning("lexue-attention cannot remove old rendered image %s", old_file)
+        return output_dir
 
     async def _send_to_bound_session(self, text: str = "", image_url: str = "") -> None:
         session = self._push_session()
@@ -629,11 +713,61 @@ class LexueAttentionPlugin(Star):
         if callable(save_config):
             save_config()
 
+    def _format_image_cooldown(self) -> str:
+        if not self._image_render_disabled_until:
+            return "无"
+        remaining = self._image_render_disabled_until - datetime.now(self._image_render_disabled_until.tzinfo)
+        minutes = int(remaining.total_seconds() // 60)
+        if minutes < 0:
+            return "无"
+        return f"约 {minutes + 1} 分钟"
+
 
 def _config_get(config: Any, key: str, default: Any = None) -> Any:
     if hasattr(config, "get"):
         return config.get(key, default)
     return default
+
+
+def _normalize_t2i_endpoint(value: str) -> str:
+    endpoint = str(value or "").strip()
+    lowered = endpoint.lower()
+    if not endpoint or lowered in {"official", "default"}:
+        return OFFICIAL_T2I_ENDPOINT
+    if lowered in {"astrbot", "builtin", "internal"}:
+        return ASTRBOT_T2I_ENDPOINT
+    return endpoint
+
+
+def _format_t2i_endpoint(value: str) -> str:
+    endpoint = _normalize_t2i_endpoint(value)
+    if endpoint == OFFICIAL_T2I_ENDPOINT:
+        return "官方服务器"
+    if endpoint == ASTRBOT_T2I_ENDPOINT:
+        return "AstrBot 全局配置"
+    return endpoint
+
+
+def _image_url_from_t2i_json(base_url: str, data: Any) -> str:
+    if not isinstance(data, dict):
+        return ""
+
+    payload = data.get("data", {})
+    candidates: list[Any] = []
+    if isinstance(payload, dict):
+        candidates.extend([payload.get("url"), payload.get("image"), payload.get("id"), payload.get("path")])
+    candidates.extend([data.get("url"), data.get("image"), data.get("id"), data.get("path")])
+
+    for value in candidates:
+        if not isinstance(value, str) or not value.strip():
+            continue
+        path = value.strip().replace("\\", "/")
+        if path.startswith(("http://", "https://")):
+            return path
+        if path.startswith("data/"):
+            return f"{base_url}/{path}" if base_url.endswith("/text2img") else f"{base_url}/text2img/{path}"
+        return f"{base_url}/data/{path.lstrip('/')}" if base_url.endswith("/text2img") else f"{base_url}/text2img/data/{path.lstrip('/')}"
+    return ""
 
 
 def build_ddl_card_context(events, now: datetime, *, title: str, limit: int) -> dict[str, Any]:
@@ -748,6 +882,11 @@ def _to_timezone(value: datetime, now: datetime) -> datetime:
 
 def _format_error(exc: Exception) -> str:
     text = str(exc)
+    if "All endpoints failed" in text and "HTTP 502" in text:
+        return (
+            "AstrBot HTML 转图服务当前不可用（HTTP 502）。"
+            "插件已回退纯文本；可稍后重试或在 AstrBot 中配置可用的 t2i 服务。"
+        )
     if isinstance(exc, requests.exceptions.ConnectionError) and (
         "NameResolutionError" in text or "Failed to resolve" in text
     ):

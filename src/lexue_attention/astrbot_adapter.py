@@ -13,6 +13,7 @@ from .models import DdlEvent
 DEFAULT_TIMEZONE = "Asia/Shanghai"
 DEFAULT_LEXUE_BASE_URL = "https://lexue.bit.edu.cn"
 DEFAULT_MILESTONES_HOURS = (72, 24, 6)
+DEFAULT_T2I_ENDPOINT = "official"
 
 DDL_CARD_TEMPLATE = r"""
 <!doctype html>
@@ -314,6 +315,7 @@ class AstrBotPluginConfig:
     enable_daily_push: bool
     enable_interval_sync: bool
     enable_image_mode: bool
+    t2i_endpoint: str
     timezone: ZoneInfo
 
     def fetch_options(self) -> FetchOptions:
@@ -345,6 +347,7 @@ def normalize_plugin_config(raw: Any, state_path: str | Path) -> AstrBotPluginCo
         enable_daily_push=_get_bool(raw, "enable_daily_push", True),
         enable_interval_sync=_get_bool(raw, "enable_interval_sync", True),
         enable_image_mode=_get_bool(raw, "enable_image_mode", True),
+        t2i_endpoint=_get_str(raw, "t2i_endpoint", DEFAULT_T2I_ENDPOINT) or DEFAULT_T2I_ENDPOINT,
         timezone=ZoneInfo(_get_str(raw, "timezone", DEFAULT_TIMEZONE)),
     )
 

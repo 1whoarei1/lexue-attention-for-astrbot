@@ -61,6 +61,12 @@
     "default": true,
     "hint": "开启后 DDL 列表、每日推送、新增/变更和提醒会优先使用 AstrBot HTML 转图发送；渲染失败时自动退回纯文本。"
   },
+  "t2i_endpoint": {
+    "description": "文转图服务器",
+    "type": "string",
+    "default": "official",
+    "hint": "默认 official，直接使用 AstrBot 官方文转图服务器；填写自建服务地址时，格式如 http://127.0.0.1:8999；填写 astrbot 则走 AstrBot 全局配置。"
+  },
   "reminder_milestones_hours": {
     "description": "提醒提前小时数",
     "type": "list",
