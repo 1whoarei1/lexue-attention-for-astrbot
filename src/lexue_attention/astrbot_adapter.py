@@ -25,6 +25,13 @@ DDL_CARD_TEMPLATE = r"""
       box-sizing: border-box;
     }
 
+    html {
+      width: 760px;
+      margin: 0;
+      padding: 0;
+      background: #f5f7fa;
+    }
+
     body {
       width: 760px;
       margin: 0;

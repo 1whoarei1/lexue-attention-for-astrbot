@@ -32,12 +32,17 @@ from lexue_attention.core import fetch_events, sync_events
 PLUGIN_NAME = "astrbot_plugin_lexue_attention"
 PLUGIN_AUTHOR = "lexue-attention"
 PLUGIN_DESC = "BIT 乐学 DDL 查询、同步和定时提醒插件。"
-PLUGIN_VERSION = "1.3.4"
+PLUGIN_VERSION = "1.3.5"
 IMAGE_RENDER_COOLDOWN_MINUTES = 30
 CUSTOM_T2I_IMAGE_TTL_DAYS = 7
 DEFAULT_T2I_ENDPOINT = "official"
 OFFICIAL_T2I_ENDPOINT = "https://t2i.soulter.top/text2img"
 ASTRBOT_T2I_ENDPOINT = "astrbot"
+DDL_CARD_RENDER_WIDTH = 760
+DDL_CARD_BASE_CLIP_HEIGHT = 246
+DDL_CARD_EVENT_CLIP_HEIGHT = 140
+DDL_CARD_EMPTY_CLIP_HEIGHT = 150
+DDL_CARD_HIDDEN_CLIP_HEIGHT = 58
 
 DDL_CARD_TEMPLATE = r"""
 <!doctype html>
@@ -46,6 +51,12 @@ DDL_CARD_TEMPLATE = r"""
   <meta charset="utf-8">
   <style>
     * { box-sizing: border-box; }
+    html {
+      width: 760px;
+      margin: 0;
+      padding: 0;
+      background: #f5f7fa;
+    }
     body {
       width: 760px;
       margin: 0;
@@ -501,7 +512,7 @@ class LexueAttentionPlugin(Star):
 
     async def _render_html_to_image(self, template: str, context: dict[str, Any], t2i_endpoint: str) -> str:
         endpoint = _normalize_t2i_endpoint(t2i_endpoint)
-        options = {"type": "png", "full_page": True, "timeout": 10000}
+        options = _render_options(context)
         if endpoint == ASTRBOT_T2I_ENDPOINT:
             return await self.html_render(template, context, options=options)
         return await asyncio.to_thread(self._render_with_custom_t2i, endpoint, template, context, options)
@@ -731,6 +742,32 @@ def _config_get(config: Any, key: str, default: Any = None) -> Any:
 
 def _config_t2i_endpoint(config: Any) -> str:
     return str(getattr(config, "t2i_endpoint", DEFAULT_T2I_ENDPOINT) or DEFAULT_T2I_ENDPOINT)
+
+
+def _render_options(context: dict[str, Any]) -> dict[str, Any]:
+    events = context.get("events") or []
+    shown_count = _safe_int(context.get("shown_count"), len(events))
+    hidden_count = _safe_int(context.get("hidden_count"), 0)
+    content_height = DDL_CARD_EMPTY_CLIP_HEIGHT if shown_count <= 0 else shown_count * DDL_CARD_EVENT_CLIP_HEIGHT
+    if hidden_count > 0:
+        content_height += DDL_CARD_HIDDEN_CLIP_HEIGHT
+    return {
+        "type": "png",
+        "timeout": 10000,
+        "clip": {
+            "x": 0,
+            "y": 0,
+            "width": DDL_CARD_RENDER_WIDTH,
+            "height": DDL_CARD_BASE_CLIP_HEIGHT + content_height,
+        },
+    }
+
+
+def _safe_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _normalize_t2i_endpoint(value: str) -> str:
