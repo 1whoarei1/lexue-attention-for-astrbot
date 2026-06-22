@@ -1,0 +1,74 @@
+{
+  "username": {
+    "description": "BIT 统一认证账号",
+    "type": "string",
+    "default": ""
+  },
+  "password": {
+    "description": "BIT 统一认证密码",
+    "type": "string",
+    "default": "",
+    "hint": "建议优先使用 calendar_url，减少保存统一认证密码。"
+  },
+  "calendar_url": {
+    "description": "乐学 iCalendar 订阅地址",
+    "type": "text",
+    "default": "",
+    "hint": "如果填写该项，插件会直接读取日历订阅，不需要账号密码。"
+  },
+  "lexue_base_url": {
+    "description": "乐学站点地址",
+    "type": "string",
+    "default": "https://lexue.bit.edu.cn"
+  },
+  "auth_method": {
+    "description": "登录方式",
+    "type": "string",
+    "default": "android",
+    "options": ["android", "ticket", "page"]
+  },
+  "push_session": {
+    "description": "主动推送会话",
+    "type": "string",
+    "default": "",
+    "hint": "通常通过 /lexue bind 自动写入。"
+  },
+  "daily_push_time": {
+    "description": "每日 DDL 推送时间",
+    "type": "string",
+    "default": "08:30",
+    "hint": "格式为 HH:MM，例如 08:30。"
+  },
+  "enable_daily_push": {
+    "description": "开启每日 DDL 推送",
+    "type": "bool",
+    "default": true
+  },
+  "check_interval_minutes": {
+    "description": "自动同步间隔分钟数",
+    "type": "int",
+    "default": 60,
+    "hint": "最小有效值为 5 分钟。"
+  },
+  "enable_interval_sync": {
+    "description": "开启间隔同步",
+    "type": "bool",
+    "default": true
+  },
+  "reminder_milestones_hours": {
+    "description": "提醒提前小时数",
+    "type": "list",
+    "default": [72, 24, 6],
+    "hint": "例如 [72, 24, 6] 表示 DDL 前 72/24/6 小时提醒一次。"
+  },
+  "max_events": {
+    "description": "单次最多展示 DDL 数量",
+    "type": "int",
+    "default": 20
+  },
+  "timezone": {
+    "description": "时区",
+    "type": "string",
+    "default": "Asia/Shanghai"
+  }
+}
