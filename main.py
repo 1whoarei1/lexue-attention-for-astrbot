@@ -1,4 +1,5 @@
 import asyncio
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -30,7 +31,252 @@ from lexue_attention.core import fetch_events, sync_events
 PLUGIN_NAME = "astrbot_plugin_lexue_attention"
 PLUGIN_AUTHOR = "lexue-attention"
 PLUGIN_DESC = "BIT 乐学 DDL 查询、同步和定时提醒插件。"
-PLUGIN_VERSION = "1.3.0"
+PLUGIN_VERSION = "1.3.1"
+
+DDL_CARD_TEMPLATE = r"""
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      width: 760px;
+      margin: 0;
+      padding: 24px;
+      background: #f5f7fa;
+      color: #172033;
+      font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", Arial, sans-serif;
+      letter-spacing: 0;
+    }
+    .panel {
+      width: 100%;
+      border: 1px solid #dfe5ee;
+      border-radius: 8px;
+      background: #ffffff;
+      overflow: hidden;
+    }
+    .header {
+      padding: 22px 24px 18px;
+      border-bottom: 1px solid #e6ebf2;
+    }
+    .header-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+    }
+    .title {
+      margin: 0;
+      font-size: 30px;
+      line-height: 1.2;
+      font-weight: 800;
+    }
+    .subtitle {
+      margin-top: 8px;
+      font-size: 14px;
+      line-height: 1.45;
+      color: #667085;
+    }
+    .total {
+      min-width: 112px;
+      padding: 10px 12px;
+      border: 1px solid #d7dde7;
+      border-radius: 8px;
+      text-align: center;
+      background: #f8fafc;
+    }
+    .total-number {
+      display: block;
+      font-size: 28px;
+      line-height: 1;
+      font-weight: 800;
+      color: #172033;
+    }
+    .total-label {
+      display: block;
+      margin-top: 5px;
+      font-size: 13px;
+      color: #667085;
+    }
+    .metrics {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 18px;
+    }
+    .metric {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 30px;
+      padding: 5px 10px;
+      border: 1px solid #d7dde7;
+      border-radius: 6px;
+      font-size: 13px;
+      color: #475467;
+      background: #ffffff;
+    }
+    .metric strong {
+      font-size: 15px;
+      color: #172033;
+    }
+    .metric.expired strong { color: #b42318; }
+    .metric.critical strong { color: #c2410c; }
+    .metric.today strong { color: #a16207; }
+    .metric.soon strong { color: #175cd3; }
+    .metric.later strong { color: #087443; }
+    .content { padding: 16px; }
+    .empty {
+      padding: 34px 24px;
+      border: 1px dashed #cbd5e1;
+      border-radius: 8px;
+      text-align: center;
+      color: #667085;
+      font-size: 18px;
+      background: #f8fafc;
+    }
+    .event {
+      display: grid;
+      grid-template-columns: 1fr 172px;
+      gap: 16px;
+      min-height: 112px;
+      padding: 16px 16px 16px 20px;
+      border: 1px solid #e1e7ef;
+      border-left-width: 6px;
+      border-radius: 8px;
+      background: #ffffff;
+    }
+    .event + .event { margin-top: 10px; }
+    .event.expired { border-left-color: #dc2626; }
+    .event.critical { border-left-color: #f97316; }
+    .event.today { border-left-color: #eab308; }
+    .event.soon { border-left-color: #2563eb; }
+    .event.later { border-left-color: #16a34a; }
+    .course {
+      display: inline-flex;
+      max-width: 100%;
+      min-height: 24px;
+      align-items: center;
+      padding: 3px 8px;
+      border-radius: 5px;
+      background: #f1f5f9;
+      color: #334155;
+      font-size: 13px;
+      line-height: 1.35;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+    .event-title {
+      margin-top: 9px;
+      font-size: 22px;
+      line-height: 1.28;
+      font-weight: 800;
+      color: #111827;
+      overflow-wrap: anywhere;
+    }
+    .remaining {
+      margin-top: 9px;
+      font-size: 15px;
+      line-height: 1.35;
+      color: #475467;
+    }
+    .side {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .status {
+      min-width: 86px;
+      padding: 6px 10px;
+      border-radius: 6px;
+      text-align: center;
+      font-size: 14px;
+      line-height: 1;
+      font-weight: 800;
+    }
+    .status.expired { color: #b42318; background: #fee4e2; }
+    .status.critical { color: #c2410c; background: #ffedd5; }
+    .status.today { color: #a16207; background: #fef3c7; }
+    .status.soon { color: #175cd3; background: #dbeafe; }
+    .status.later { color: #087443; background: #dcfce7; }
+    .due { text-align: right; }
+    .due-date {
+      font-size: 17px;
+      line-height: 1.25;
+      font-weight: 800;
+      color: #172033;
+    }
+    .due-time {
+      margin-top: 5px;
+      font-size: 28px;
+      line-height: 1;
+      font-weight: 800;
+      color: #172033;
+    }
+    .hidden {
+      margin-top: 12px;
+      padding: 10px 12px;
+      border-radius: 6px;
+      background: #f1f5f9;
+      color: #475467;
+      font-size: 14px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <section class="panel">
+    <header class="header">
+      <div class="header-row">
+        <div>
+          <h1 class="title">{{ title|e }}</h1>
+          <div class="subtitle">{{ generated_at|e }} 更新{% if hidden_count > 0 %}，已显示 {{ shown_count }} / {{ total_count }} 个{% endif %}</div>
+        </div>
+        <div class="total">
+          <span class="total-number">{{ total_count }}</span>
+          <span class="total-label">DDL</span>
+        </div>
+      </div>
+      <div class="metrics">
+        {% for metric in metrics %}
+        <span class="metric {{ metric.tone|e }}">{{ metric.label|e }} <strong>{{ metric.value }}</strong></span>
+        {% endfor %}
+      </div>
+    </header>
+    <main class="content">
+      {% if events %}
+        {% for item in events %}
+        <article class="event {{ item.tone|e }}">
+          <div>
+            {% if item.course %}
+            <div class="course">{{ item.course|e }}</div>
+            {% endif %}
+            <div class="event-title">{{ item.title|e }}</div>
+            <div class="remaining">{{ item.remaining|e }}</div>
+          </div>
+          <div class="side">
+            <div class="status {{ item.tone|e }}">{{ item.status_label|e }}</div>
+            <div class="due">
+              <div class="due-date">{{ item.due_date|e }} {{ item.weekday|e }}</div>
+              <div class="due-time">{{ item.due_time|e }}</div>
+            </div>
+          </div>
+        </article>
+        {% endfor %}
+        {% if hidden_count > 0 %}
+        <div class="hidden">还有 {{ hidden_count }} 个 DDL 未显示，可调大 max_events。</div>
+        {% endif %}
+      {% else %}
+        <div class="empty">暂无 DDL</div>
+      {% endif %}
+    </main>
+  </section>
+</body>
+</html>
+"""
 
 
 @filter.command_group("lexue", alias={"乐学", "ddl"})
@@ -225,11 +471,6 @@ class LexueAttentionPlugin(Star):
             return ""
 
         try:
-            from lexue_attention.astrbot_adapter import (
-                DDL_CARD_TEMPLATE,
-                build_ddl_card_context,
-            )
-
             context = build_ddl_card_context(events, now, title=title, limit=limit)
             return await self.html_render(
                 DDL_CARD_TEMPLATE,
@@ -393,6 +634,116 @@ def _config_get(config: Any, key: str, default: Any = None) -> Any:
     if hasattr(config, "get"):
         return config.get(key, default)
     return default
+
+
+def build_ddl_card_context(events, now: datetime, *, title: str, limit: int) -> dict[str, Any]:
+    sorted_events = sorted(events, key=lambda item: item.due_at)
+    visible_events = sorted_events[:limit]
+    cards = [_event_card(event, now) for event in visible_events]
+    counts = _status_counts(sorted_events, now)
+    return {
+        "title": title,
+        "generated_at": now.strftime("%Y-%m-%d %H:%M"),
+        "total_count": len(sorted_events),
+        "shown_count": len(visible_events),
+        "hidden_count": max(0, len(sorted_events) - len(visible_events)),
+        "events": cards,
+        "metrics": [
+            {"label": "已过期", "value": counts["expired"], "tone": "expired"},
+            {"label": "马上截止", "value": counts["critical"], "tone": "critical"},
+            {"label": "今日截止", "value": counts["today"], "tone": "today"},
+            {"label": "3 天内", "value": counts["soon"], "tone": "soon"},
+            {"label": "待办", "value": counts["later"], "tone": "later"},
+        ],
+    }
+
+
+def _event_card(event, now: datetime) -> dict[str, str]:
+    due_at = _to_timezone(event.due_at, now)
+    status = _event_status(due_at, now)
+    return {
+        "title": _clean_title(event.title),
+        "course": _clean_course(event.course),
+        "due_date": due_at.strftime("%m 月 %d 日"),
+        "due_time": due_at.strftime("%H:%M"),
+        "weekday": _weekday(due_at),
+        "remaining": _format_compact_remaining(due_at, now),
+        "status_label": status["label"],
+        "tone": status["tone"],
+    }
+
+
+def _event_status(due_at: datetime, now: datetime) -> dict[str, str]:
+    total_minutes = int((due_at - now).total_seconds() // 60)
+    if total_minutes < 0:
+        return {"tone": "expired", "label": "已过期"}
+    if total_minutes <= 6 * 60:
+        return {"tone": "critical", "label": "马上截止"}
+    if due_at.date() == now.date() or total_minutes <= 24 * 60:
+        return {"tone": "today", "label": "今日截止"}
+    if total_minutes <= 72 * 60:
+        return {"tone": "soon", "label": "3 天内"}
+    return {"tone": "later", "label": "待办"}
+
+
+def _status_counts(events, now: datetime) -> dict[str, int]:
+    counts = {"expired": 0, "critical": 0, "today": 0, "soon": 0, "later": 0}
+    for event in events:
+        tone = _event_status(_to_timezone(event.due_at, now), now)["tone"]
+        counts[tone] += 1
+    return counts
+
+
+def _format_compact_remaining(due_at: datetime, now: datetime) -> str:
+    delta = due_at - now
+    total_minutes = int(delta.total_seconds() // 60)
+    prefix = "剩余"
+    if total_minutes < 0:
+        prefix = "已过期"
+        total_minutes = abs(total_minutes)
+
+    days, rem = divmod(total_minutes, 24 * 60)
+    hours, minutes = divmod(rem, 60)
+    if days:
+        return f"{prefix} {days} 天 {hours} 小时"
+    if hours:
+        return f"{prefix} {hours} 小时 {minutes} 分钟"
+    return f"{prefix} {minutes} 分钟"
+
+
+def _clean_title(value: str) -> str:
+    text = value.strip()
+    text = re.sub(r"[（(]\s*截止时间[^）)]*[）)]", "", text)
+    text = re.sub(r"^请在此提交[:：]?", "", text)
+    text = re.sub(r"\s*(已到期|已截止|已过期)\s*$", "", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip(" -:：") or value.strip()
+
+
+def _clean_course(value: str) -> str:
+    course = value.strip()
+    if not course:
+        return ""
+    course = re.sub(r"^\d{4}-\d{4}[-\s]*第?\d学期[-\s-]*", "", course)
+    course = re.sub(r"^\d{4}-\d{4}\s*第[一二三四五六七八九十\d]+学期\s*", "", course)
+    course = re.sub(r"[_-]\d+$", "", course)
+    parts = [part.strip() for part in re.split(r"--+| - ", course) if part.strip()]
+    if len(parts) > 1 and parts[-1].endswith("老师"):
+        course = " ".join(parts[:-1])
+    course = re.sub(r"\s+", " ", course)
+    return course.strip(" -_") or value.strip()
+
+
+def _weekday(value: datetime) -> str:
+    names = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+    return names[value.weekday()]
+
+
+def _to_timezone(value: datetime, now: datetime) -> datetime:
+    tz = now.tzinfo
+    if value.tzinfo is None:
+        return value.replace(tzinfo=tz)
+    return value.astimezone(tz)
 
 
 def _format_error(exc: Exception) -> str:
