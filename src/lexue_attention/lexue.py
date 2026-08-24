@@ -12,6 +12,10 @@ class LexueError(RuntimeError):
     """Raised when Lexue calendar export or fetching fails."""
 
 
+class LexueCalendarAuthExpired(LexueError):
+    """Raised when a saved Lexue calendar subscription is no longer usable."""
+
+
 @dataclass(slots=True)
 class LexueClient:
     """Client for Lexue calendar export.
@@ -59,7 +63,11 @@ class LexueClient:
 
     async def fetch_ics(self, calendar_url: str) -> str:
         response = await self.session.get(calendar_url, timeout=self.request_timeout)
+        if response.status_code in {401, 403, 404, 410}:
+            raise LexueCalendarAuthExpired("乐学日历授权已失效")
         response.raise_for_status()
+        if "BEGIN:VCALENDAR" not in response.text:
+            raise LexueCalendarAuthExpired("乐学日历授权已失效或返回了登录页面")
         return response.text
 
 

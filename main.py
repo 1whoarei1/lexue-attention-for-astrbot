@@ -29,11 +29,13 @@ from lexue_attention.astrbot_adapter import (
 )
 from lexue_attention.auth import AuthError, SmsCodeContext
 from lexue_attention.core import create_calendar_subscription, fetch_events, sync_events
+from lexue_attention.lexue import LexueCalendarAuthExpired
+from lexue_attention.mail_code import MailCodeConfig, MailCodeError, wait_for_sso_email_code
 
 PLUGIN_NAME = "astrbot_plugin_lexue_attention"
 PLUGIN_AUTHOR = "lexue-attention"
 PLUGIN_DESC = "BIT 乐学 DDL 查询、同步和定时提醒插件。"
-PLUGIN_VERSION = "1.5.2"
+PLUGIN_VERSION = "1.5.3"
 IMAGE_RENDER_COOLDOWN_MINUTES = 30
 CUSTOM_T2I_IMAGE_TTL_DAYS = 7
 DEFAULT_T2I_ENDPOINT = "astrbot"
@@ -333,7 +335,7 @@ class LexueAttentionPlugin(Star):
             "lexue-attention 指令：\n"
             "/lexue bind 绑定当前会话用于主动推送\n"
             "/lexue account <账号> <密码> 设置 BIT 统一认证账号密码\n"
-            "/lexue login 登录统一认证；需要时会等待邮箱验证码，并持久化乐学授权\n"
+            "/lexue login 登录统一认证；配置邮箱后可自动取验证码并持久化乐学授权\n"
             "/lexue code <验证码> 提交登录邮箱验证码\n"
             "/lexue calendar <ics地址> 设置乐学日历订阅地址\n"
             "/lexue daily <HH:MM> 设置每日 DDL 推送时间\n"
@@ -358,7 +360,7 @@ class LexueAttentionPlugin(Star):
         self.config["username"] = username.strip()
         self.config["password"] = password
         self._save_config()
-        yield event.plain_result("已保存账号和密码。请继续发送 /lexue login 完成短信验证和持久授权。")
+        yield event.plain_result("已保存统一认证账号和密码。请在插件配置页填写邮箱账号密码，再发送 /lexue login。")
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @lexue.command("login", alias={"登录", "授权"})
@@ -380,7 +382,7 @@ class LexueAttentionPlugin(Star):
                     config.username,
                     config.password,
                     config.lexue_base_url,
-                    sms_code_callback=lambda context: self._wait_for_sms_code(event, context),
+                    sms_code_callback=self._verification_code_callback(config, event),
                 )
             except Exception as exc:
                 login_error = _format_error(exc)
@@ -393,12 +395,11 @@ class LexueAttentionPlugin(Star):
 
         self.config["calendar_url"] = calendar_url
         self.config["auth_method"] = "android"
-        self.config["password"] = ""
         self._save_config()
         self._last_error = ""
         yield event.plain_result(
-            "乐学授权成功，已持久化日历订阅权限并清除已保存密码。"
-            "后续查询、同步和重启不会重复要求邮箱验证码。"
+            "乐学授权成功，已持久化日历订阅权限。"
+            "统一认证密码将保留，用于订阅失效后自动重新授权。"
         )
 
     @filter.permission_type(filter.PermissionType.ADMIN)
@@ -466,7 +467,7 @@ class LexueAttentionPlugin(Star):
         config = self._plugin_config()
         try:
             validate_fetch_config(config)
-            events = await fetch_events(config.fetch_options())
+            config, events = await self._fetch_events_with_reauth(config, event)
         except Exception as exc:
             logger.error("lexue-attention fetch failed: %s", _format_error(exc))
             yield event.plain_result(f"获取 DDL 失败：{_format_error(exc)}")
@@ -491,7 +492,7 @@ class LexueAttentionPlugin(Star):
     async def sync_ddl(self, event: AstrMessageEvent):
         """主动同步 DDL，更新本地状态并发送新增、变更和提醒。"""
         try:
-            config, now, result = await self._run_sync()
+            config, now, result = await self._run_sync(event)
         except Exception as exc:
             logger.error("lexue-attention manual sync failed: %s", _format_error(exc))
             yield event.plain_result(f"同步 DDL 失败：{_format_error(exc)}")
@@ -520,6 +521,9 @@ class LexueAttentionPlugin(Star):
             "lexue-attention 状态",
             f"账号：{'已设置' if config.username else '未设置'}",
             f"密码：{'已设置' if config.password else '未设置'}",
+            f"邮箱账号：{'已设置' if config.mail_username else '未设置'}",
+            f"邮箱密码：{'已设置' if config.mail_password else '未设置'}",
+            f"邮箱自动取码：{'开启' if config.enable_mail_auto_code else '关闭'}",
             f"日历订阅：{'已设置' if config.calendar_url else '未设置'}",
             f"持久授权：{'已建立' if config.calendar_url else '未建立'}",
             f"主动推送会话：{'已绑定' if push_session else '未绑定'}",
@@ -536,16 +540,19 @@ class LexueAttentionPlugin(Star):
         self,
         event: AstrMessageEvent,
         context: SmsCodeContext,
+        *,
+        announce: bool = True,
     ) -> str:
         pending = asyncio.get_running_loop().create_future()
         self._pending_sms_code = pending
         self._pending_sms_origin = str(event.unified_msg_origin)
-        await event.send(
-            event.plain_result(
-                f"统一身份认证邮箱验证码已发送至 {context.masked_phone}。"
-                "请在 3 分钟内发送 /lexue code <验证码>。"
+        if announce:
+            await event.send(
+                event.plain_result(
+                    f"统一身份认证邮箱验证码已发送至 {context.masked_phone}。"
+                    "请在 3 分钟内发送 /lexue code <验证码>。"
+                )
             )
-        )
         try:
             return await asyncio.wait_for(pending, timeout=180)
         except TimeoutError as exc:
@@ -555,17 +562,90 @@ class LexueAttentionPlugin(Star):
                 self._pending_sms_code = None
                 self._pending_sms_origin = ""
 
-    async def _run_sync(self):
+    def _verification_code_callback(self, config, event: AstrMessageEvent | None = None):
+        async def callback(context: SmsCodeContext) -> str:
+            if config.enable_mail_auto_code and config.mail_username and config.mail_password:
+                if event is not None:
+                    await event.send(event.plain_result("验证码邮件已发送，正在从校内邮箱自动读取。"))
+                try:
+                    code = await wait_for_sso_email_code(
+                        MailCodeConfig(
+                            username=config.mail_username,
+                            password=config.mail_password,
+                        ),
+                        requested_at=context.requested_at or datetime.now().timestamp(),
+                    )
+                except MailCodeError as exc:
+                    if event is None:
+                        raise AuthError(f"邮箱自动取码失败：{exc}") from exc
+                    await event.send(
+                        event.plain_result(
+                            f"邮箱自动取码失败：{exc}。请在 3 分钟内发送 /lexue code <验证码>。"
+                        )
+                    )
+                    return await self._wait_for_sms_code(event, context, announce=False)
+                if event is not None:
+                    await event.send(event.plain_result("已自动获取邮箱验证码，正在完成乐学授权。"))
+                return code
+
+            if event is not None:
+                return await self._wait_for_sms_code(event, context)
+            raise AuthError("未配置邮箱自动取码，后台任务无法完成二次验证")
+
+        return callback
+
+    async def _refresh_calendar_subscription(self, config, event: AstrMessageEvent | None = None):
+        if not config.username or not config.password:
+            raise AuthError("乐学日历授权已失效，且未保存统一认证账号或密码")
+
+        async with self._login_lock:
+            current = self._plugin_config()
+            if current.calendar_url and current.calendar_url != config.calendar_url:
+                return current
+            if event is not None:
+                await event.send(event.plain_result("乐学日历授权已失效，正在自动重新授权。"))
+            calendar_url = await create_calendar_subscription(
+                current.username,
+                current.password,
+                current.lexue_base_url,
+                sms_code_callback=self._verification_code_callback(current, event),
+            )
+            self.config["calendar_url"] = calendar_url
+            self.config["auth_method"] = "android"
+            self._save_config()
+            return self._plugin_config()
+
+    async def _fetch_events_with_reauth(self, config, event: AstrMessageEvent | None = None):
+        callback = self._verification_code_callback(config, event)
+        try:
+            return config, await fetch_events(config.fetch_options(callback))
+        except LexueCalendarAuthExpired:
+            refreshed = await self._refresh_calendar_subscription(config, event)
+            return refreshed, await fetch_events(
+                refreshed.fetch_options(self._verification_code_callback(refreshed, event))
+            )
+
+    async def _run_sync(self, event: AstrMessageEvent | None = None):
         config = self._plugin_config()
         validate_fetch_config(config)
         async with self._sync_lock:
             now = datetime.now(config.timezone)
-            result = await sync_events(
-                config.fetch_options(),
-                config.state_path,
-                now,
-                config.reminder_milestones_hours,
-            )
+            callback = self._verification_code_callback(config, event)
+            try:
+                result = await sync_events(
+                    config.fetch_options(callback),
+                    config.state_path,
+                    now,
+                    config.reminder_milestones_hours,
+                )
+            except LexueCalendarAuthExpired:
+                config = await self._refresh_calendar_subscription(config, event)
+                result = await sync_events(
+                    config.fetch_options(self._verification_code_callback(config, event)),
+                    config.state_path,
+                    now,
+                    config.reminder_milestones_hours,
+                )
 
         self._last_error = ""
         return config, now, result
@@ -772,7 +852,7 @@ class LexueAttentionPlugin(Star):
                 if not is_same_minute(now, config.daily_push_time):
                     continue
                 self._last_daily_key = current_key
-                events = await fetch_events(config.fetch_options())
+                config, events = await self._fetch_events_with_reauth(config)
                 await self._send_event_list_to_bound_session(
                     events,
                     now,

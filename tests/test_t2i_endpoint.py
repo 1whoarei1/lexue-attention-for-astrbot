@@ -137,7 +137,7 @@ def test_format_error_does_not_echo_secret_request_url():
 
 
 @pytest.mark.asyncio
-async def test_successful_interactive_login_persists_calendar_and_clears_password(monkeypatch):
+async def test_successful_interactive_login_persists_calendar_and_keeps_password(monkeypatch):
     module = _load_plugin_main()
     plugin = module.LexueAttentionPlugin.__new__(module.LexueAttentionPlugin)
     plugin.config = {"password": "private-password"}
@@ -146,6 +146,9 @@ async def test_successful_interactive_login_persists_calendar_and_clears_passwor
     plugin._plugin_config = lambda: types.SimpleNamespace(
         username="student",
         password="private-password",
+        mail_username="mail-user",
+        mail_password="mail-password",
+        enable_mail_auto_code=True,
         lexue_base_url="https://lexue.example",
     )
     saved: list[bool] = []
@@ -160,9 +163,9 @@ async def test_successful_interactive_login_persists_calendar_and_clears_passwor
     results = [item async for item in plugin.login_lexue(event)]
 
     assert plugin.config["calendar_url"].endswith("token=durable")
-    assert plugin.config["password"] == ""
+    assert plugin.config["password"] == "private-password"
     assert saved == [True]
-    assert "清除已保存密码" in results[0]
+    assert "保留" in results[0]
 
 
 @pytest.mark.asyncio
@@ -205,6 +208,95 @@ async def test_sms_code_command_completes_pending_login_without_echoing_code():
     assert results == ["已接收验证码，正在完成乐学授权。"]
     assert "123456" not in results[0]
     assert plugin._pending_sms_code is None
+
+
+@pytest.mark.asyncio
+async def test_email_auto_code_callback_does_not_echo_code_or_password(monkeypatch):
+    module = _load_plugin_main()
+    plugin = module.LexueAttentionPlugin.__new__(module.LexueAttentionPlugin)
+    captured = {}
+
+    async def fake_wait(config, *, requested_at):
+        captured["config"] = config
+        captured["requested_at"] = requested_at
+        return "482731"
+
+    monkeypatch.setattr(module, "wait_for_sso_email_code", fake_wait)
+
+    class Event:
+        def __init__(self):
+            self.sent = []
+
+        def plain_result(self, text):
+            return text
+
+        async def send(self, result):
+            self.sent.append(result)
+
+    event = Event()
+    config = types.SimpleNamespace(
+        enable_mail_auto_code=True,
+        mail_username="student@bit.edu.cn",
+        mail_password="mail-secret",
+    )
+
+    code = await plugin._verification_code_callback(config, event)(
+        module.SmsCodeContext(
+            masked_phone="stud****@bit.edu.cn",
+            channel="email",
+            requested_at=1234.5,
+        )
+    )
+
+    assert code == "482731"
+    assert captured["requested_at"] == 1234.5
+    assert captured["config"].password == "mail-secret"
+    messages = "\n".join(event.sent)
+    assert "482731" not in messages
+    assert "mail-secret" not in messages
+
+
+@pytest.mark.asyncio
+async def test_expired_calendar_is_reauthorized_once_and_new_url_is_saved(monkeypatch):
+    module = _load_plugin_main()
+    plugin = module.LexueAttentionPlugin.__new__(module.LexueAttentionPlugin)
+    plugin.config = {
+        "username": "student",
+        "password": "sso-secret",
+        "mail_username": "student@bit.edu.cn",
+        "mail_password": "mail-secret",
+        "enable_mail_auto_code": True,
+        "calendar_url": "https://lexue.example/calendar.ics?token=expired",
+    }
+    plugin._login_lock = asyncio.Lock()
+    plugin._plugin_config = lambda: module.normalize_plugin_config(plugin.config, "state.json")
+    saved = []
+    plugin._save_config = lambda: saved.append(True)
+    fetch_urls = []
+
+    async def fake_fetch(options):
+        fetch_urls.append(options.calendar_url)
+        if options.calendar_url.endswith("expired"):
+            raise module.LexueCalendarAuthExpired("expired")
+        return ["event"]
+
+    async def fake_subscription(*args, **kwargs):
+        assert kwargs["sms_code_callback"] is not None
+        return "https://lexue.example/calendar.ics?token=fresh"
+
+    monkeypatch.setattr(module, "fetch_events", fake_fetch)
+    monkeypatch.setattr(module, "create_calendar_subscription", fake_subscription)
+
+    config, events = await plugin._fetch_events_with_reauth(plugin._plugin_config())
+
+    assert events == ["event"]
+    assert config.calendar_url.endswith("fresh")
+    assert plugin.config["password"] == "sso-secret"
+    assert fetch_urls == [
+        "https://lexue.example/calendar.ics?token=expired",
+        "https://lexue.example/calendar.ics?token=fresh",
+    ]
+    assert saved == [True]
 
 
 @pytest.mark.asyncio

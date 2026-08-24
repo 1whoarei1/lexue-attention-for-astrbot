@@ -8,7 +8,25 @@
     "description": "BIT 统一认证密码",
     "type": "string",
     "default": "",
-    "hint": "保存后使用 /lexue login 完成短信二次验证；成功后插件会持久化 calendar_url。"
+    "hint": "用于首次登录及日历订阅失效后的自动重新授权。请仅在受信任的 AstrBot 配置页填写。"
+  },
+  "mail_username": {
+    "description": "BIT 邮箱账号",
+    "type": "string",
+    "default": "",
+    "hint": "邮箱账号可与统一认证账号不同，用于从 mail.bit.edu.cn 自动读取最新验证码。"
+  },
+  "mail_password": {
+    "description": "BIT 邮箱密码",
+    "type": "string",
+    "default": "",
+    "hint": "仅用于 IMAP SSL 只读取码。请勿通过 QQ 命令或公开日志发送。"
+  },
+  "enable_mail_auto_code": {
+    "description": "开启邮箱自动取码",
+    "type": "bool",
+    "default": true,
+    "hint": "通过 mail.bit.edu.cn:993 只读轮询最新的统一身份认证验证码邮件。"
   },
   "calendar_url": {
     "description": "乐学 iCalendar 订阅地址",
@@ -26,7 +44,7 @@
     "type": "string",
     "default": "android",
     "options": ["android", "ticket", "page"],
-    "hint": "android 使用 BIT-Login v4 登录及短信二次验证；ticket/page 仅用于旧流程诊断。"
+    "hint": "android 使用 BIT-Login v4 登录及邮箱二次验证；ticket/page 仅用于旧流程诊断。"
   },
   "push_session": {
     "description": "主动推送会话",

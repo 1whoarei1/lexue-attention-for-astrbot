@@ -6,7 +6,7 @@ import pytest
 from lexue_attention import core
 from lexue_attention.auth import BitSsoTicketClient, BitSsoV4Client
 from lexue_attention.core import FetchOptions
-from lexue_attention.lexue import LexueClient
+from lexue_attention.lexue import LexueCalendarAuthExpired, LexueClient
 
 
 @pytest.mark.asyncio
@@ -29,6 +29,18 @@ async def test_fetch_events_uses_async_http_client(monkeypatch):
 
     assert [event.uid for event in events] == ["assignment-1@example", "quiz-2@example"]
     assert seen_urls == ["https://lexue.example/calendar.ics?token=secret"]
+
+
+@pytest.mark.asyncio
+async def test_calendar_login_page_is_reported_as_expired_authorization():
+    def handle_request(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html><title>统一身份认证</title></html>")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle_request)) as session:
+        client = LexueClient(session=session)
+
+        with pytest.raises(LexueCalendarAuthExpired):
+            await client.fetch_ics("https://lexue.example/calendar.ics?token=expired")
 
 
 @pytest.mark.asyncio

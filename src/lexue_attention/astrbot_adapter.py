@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, time
 from pathlib import Path
 import re
@@ -310,7 +310,10 @@ DDL_CARD_TEMPLATE = r"""
 @dataclass(frozen=True, slots=True)
 class AstrBotPluginConfig:
     username: str
-    password: str
+    password: str = field(repr=False)
+    mail_username: str
+    mail_password: str = field(repr=False)
+    enable_mail_auto_code: bool
     calendar_url: str
     lexue_base_url: str
     auth_method: str
@@ -325,13 +328,14 @@ class AstrBotPluginConfig:
     t2i_endpoint: str
     timezone: ZoneInfo
 
-    def fetch_options(self) -> FetchOptions:
+    def fetch_options(self, sms_code_callback=None) -> FetchOptions:
         return FetchOptions(
             username=self.username,
             password=self.password,
             calendar_url=self.calendar_url,
             lexue_base_url=self.lexue_base_url,
             auth_method=self.auth_method,
+            sms_code_callback=sms_code_callback,
         )
 
 
@@ -339,6 +343,9 @@ def normalize_plugin_config(raw: Any, state_path: str | Path) -> AstrBotPluginCo
     return AstrBotPluginConfig(
         username=_get_str(raw, "username"),
         password=_get_str(raw, "password"),
+        mail_username=_get_str(raw, "mail_username"),
+        mail_password=_get_str(raw, "mail_password"),
+        enable_mail_auto_code=_get_bool(raw, "enable_mail_auto_code", True),
         calendar_url=_get_str(raw, "calendar_url"),
         lexue_base_url=_get_str(raw, "lexue_base_url", DEFAULT_LEXUE_BASE_URL),
         auth_method=_normalize_auth_method(_get_str(raw, "auth_method", "android")),

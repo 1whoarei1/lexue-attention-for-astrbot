@@ -46,6 +46,7 @@ class SmsCodeContext:
     masked_phone: str
     purpose: str = "password_second_factor"
     channel: str = "sms"
+    requested_at: float = 0.0
 
 
 SmsCodeCallback = Callable[[SmsCodeContext], Awaitable[str]]
@@ -165,6 +166,7 @@ class BitSsoV4Client:
         if callback is None:
             raise SmsVerificationRequired(masked_email, channel="email")
 
+        requested_at = time.time()
         sent = await self._request_json(
             "POST",
             f"{self.base_url}/cas/api/protected/mail/publicNoToken/sendMailCode4SecondAuth",
@@ -180,7 +182,13 @@ class BitSsoV4Client:
             raise AuthError(_response_message(sent) or "邮箱验证码发送失败")
 
         code = (
-            await callback(SmsCodeContext(masked_phone=masked_email, channel="email"))
+            await callback(
+                SmsCodeContext(
+                    masked_phone=masked_email,
+                    channel="email",
+                    requested_at=requested_at,
+                )
+            )
         ).strip()
         if not re.fullmatch(r"\d{4,8}", code):
             raise AuthError("邮箱验证码格式无效")

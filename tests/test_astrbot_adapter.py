@@ -40,8 +40,23 @@ def test_normalize_plugin_config_defaults_state_path():
     assert config.auth_method == "android"
     assert config.state_path == "data/plugin_data/lexue/state.json"
     assert config.reminder_milestones_hours == (72, 24, 6)
+    assert config.mail_username == ""
+    assert config.mail_password == ""
+    assert config.enable_mail_auto_code is True
     assert config.enable_image_mode is True
     assert config.t2i_endpoint == "astrbot"
+
+
+def test_plugin_config_repr_hides_passwords():
+    config = normalize_plugin_config(
+        {"password": "sso-secret", "mail_password": "mail-secret"},
+        "state.json",
+    )
+
+    rendered = repr(config)
+
+    assert "sso-secret" not in rendered
+    assert "mail-secret" not in rendered
 
 
 def test_validate_fetch_config_requires_credentials_without_calendar_url():

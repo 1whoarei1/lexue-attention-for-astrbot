@@ -87,7 +87,7 @@ Copy-Item -Recurse .\astrbot_plugin_lexue_attention <AstrBot>\data\plugins\astrb
 插件的“主动回复”实际是定时主动推送，不需要用户每天触发命令。必须满足三个条件：
 
 1. 在目标群聊或私聊中发送 `/lexue bind`。
-2. 设置数据来源：`/lexue calendar <ics地址>`，或先 `/lexue account <学号> <密码>` 再 `/lexue login` 完成短信验证。
+2. 设置数据来源：`/lexue calendar <ics地址>`，或在插件配置页填写统一认证与邮箱凭据，再执行 `/lexue login` 完成邮箱验证。
 3. 开启每日推送或间隔同步。
 
 每日固定时间推送当前 DDL：
@@ -215,7 +215,10 @@ t2i_endpoint = official
 这些配置可以在 AstrBot 插件配置页修改：
 
 - `username`：BIT 统一认证账号。
-- `password`：BIT 统一认证密码。
+- `password`：BIT 统一认证密码。插件会保留它，以便日历订阅失效后自动重新授权。
+- `mail_username`：BIT 邮箱账号，可以与统一认证账号不同。
+- `mail_password`：BIT 邮箱密码，仅用于 IMAP SSL 自动取码。
+- `enable_mail_auto_code`：是否自动读取最新的统一身份认证验证码邮件，默认开启。
 - `calendar_url`：乐学 iCalendar 订阅地址。推荐优先使用。
 - `lexue_base_url`：乐学站点地址，默认 `https://lexue.bit.edu.cn`。
 - `auth_method`：登录方式，默认 `android`，对应 BIT-Login v4 密码登录及邮箱二次验证流程；`ticket`、`page` 仅保留作旧流程诊断。
@@ -232,20 +235,22 @@ t2i_endpoint = official
 
 ## 使用建议
 
-优先使用 `calendar_url`，原因是：
+插件仍优先使用 `calendar_url`，因为日常查询不需要重复登录。开启自动重新授权时，还需要保存统一认证账号密码和邮箱账号密码：
 
-- 不需要保存统一认证密码。
-- 安装和推送更稳定。
-- 登录流程变化时受影响更小。
+- 正常情况下直接读取日历订阅，不访问邮箱。
+- 日历订阅失效或返回登录页时，仅自动重新授权一次并更新 `calendar_url`。
+- 二次验证触发后，通过 `mail.bit.edu.cn:993` 以只读 IMAP 方式轮询新邮件，并用 `BODY.PEEK` 获取验证码，不会主动把邮件标记为已读。
 
-只有在没有日历订阅地址时，再使用：
+在 AstrBot 插件配置页填写 `mail_username`、`mail_password`，然后使用：
 
 ```text
 /lexue account <学号> <统一认证密码>
 /lexue login
 ```
 
-`/lexue login` 会在需要时把验证码发送到统一认证账号绑定的邮箱。收到邮件后，在 3 分钟内于同一会话发送 `/lexue code <验证码>`；不要只发送验证码数字。此阶段验证码仍由你手动提交，插件不会访问 `mail.bit.edu.cn`，也不需要邮箱账号或邮箱密码。登录成功后，插件会清除配置中的统一认证密码，只保留学号和乐学 iCalendar 订阅地址；日常定时任务直接使用该地址，不保存邮箱验证码，也不会因短期 SSO Cookie 过期而反复发送验证邮件。建议在私聊中完成这一步。
+`/lexue login` 会在需要时向统一认证账号绑定的邮箱发送验证码。自动取码成功后插件直接完成授权，不会把验证码输出到聊天或日志。自动取码失败时，交互式登录会退回手动模式，可在 3 分钟内于同一会话发送 `/lexue code <验证码>`；不要只发送验证码数字。后台定时任务无法等待人工输入，因此会记录一个不含敏感信息的错误，留待下次任务重试。
+
+邮箱与统一认证密码只应在受信任的 AstrBot 配置页中填写，不要通过 QQ 命令、群聊或公开日志发送。配置文件包含可恢复的明文凭据，请限制 AstrBot 数据目录的访问权限并做好安全备份。
 
 如果曾经把密码粘贴到群聊、公开日志或不可信终端里，建议立即修改统一认证密码。
 
