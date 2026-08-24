@@ -2,7 +2,7 @@
 
 `lexue-attention` 是一个 AstrBot 插件，也可以作为独立 Python 工具使用。它用于获取 BIT 乐学作业 DDL，支持手动查询、状态同步、每日主动推送和 DDL 前提醒。
 
-当前登录流程对齐 `BIT101-Android` 使用的 `BIT-Login v4.0.2`：先提交统一认证账号密码，按需完成绑定手机号的短信二次验证，再建立乐学会话并导出 iCalendar 订阅。订阅地址持久化后，机器人重启和定时同步不需要重复登录。
+当前登录流程基于 `BIT101-Android` 使用的 `BIT-Login v4.0.2`，并适配统一身份认证当前提供的邮箱二次验证：先提交统一认证账号密码，按需向绑定邮箱发送验证码，再建立乐学会话并导出 iCalendar 订阅。订阅地址持久化后，机器人重启和定时同步不需要重复登录。
 
 ## 功能
 
@@ -188,8 +188,8 @@ t2i_endpoint = official
 - `/lexue help`：查看插件帮助。
 - `/lexue bind`：绑定当前群聊或私聊，用于主动推送。
 - `/lexue account <账号> <密码>`：保存 BIT 统一认证账号和密码。
-- `/lexue login`：使用新统一认证流程登录；需要时等待短信验证码，成功后持久化乐学订阅权限。
-- `/lexue code <验证码>`：提交 `/lexue login` 触发的短信验证码，必须在发起登录的同一会话中发送。
+- `/lexue login`：使用新统一认证流程登录；需要时等待邮箱验证码，成功后持久化乐学订阅权限。
+- `/lexue code <验证码>`：提交 `/lexue login` 触发的邮箱验证码，必须在发起登录的同一会话中发送。
 - `/lexue calendar <ics地址>`：保存乐学 iCalendar 订阅地址。
 - `/lexue daily <HH:MM>`：设置每日 DDL 推送时间，并开启每日推送。
 - `/lexue interval <分钟>`：设置自动同步间隔，并开启间隔同步，最小 5 分钟。
@@ -218,7 +218,7 @@ t2i_endpoint = official
 - `password`：BIT 统一认证密码。
 - `calendar_url`：乐学 iCalendar 订阅地址。推荐优先使用。
 - `lexue_base_url`：乐学站点地址，默认 `https://lexue.bit.edu.cn`。
-- `auth_method`：登录方式，默认 `android`，对应 BIT-Login v4 密码及短信二次验证流程；`ticket`、`page` 仅保留作旧流程诊断。
+- `auth_method`：登录方式，默认 `android`，对应 BIT-Login v4 密码登录及邮箱二次验证流程；`ticket`、`page` 仅保留作旧流程诊断。
 - `push_session`：主动推送会话。通常由 `/lexue bind` 自动写入。
 - `daily_push_time`：每日 DDL 推送时间，格式为 `HH:MM`。
 - `enable_daily_push`：是否开启每日推送。
@@ -245,7 +245,7 @@ t2i_endpoint = official
 /lexue login
 ```
 
-`/lexue login` 会在需要时把验证码发送到统一认证绑定手机号。收到短信后，在 3 分钟内于同一会话发送 `/lexue code <验证码>`；不要只发送验证码数字。登录成功后，插件会清除配置中的统一认证密码，只保留学号和乐学 iCalendar 订阅地址；日常定时任务直接使用该地址，不保存短信验证码，也不会因短期 SSO Cookie 过期而反复发短信。建议在私聊中完成这一步。
+`/lexue login` 会在需要时把验证码发送到统一认证账号绑定的邮箱。收到邮件后，在 3 分钟内于同一会话发送 `/lexue code <验证码>`；不要只发送验证码数字。此阶段验证码仍由你手动提交，插件不会访问 `mail.bit.edu.cn`，也不需要邮箱账号或邮箱密码。登录成功后，插件会清除配置中的统一认证密码，只保留学号和乐学 iCalendar 订阅地址；日常定时任务直接使用该地址，不保存邮箱验证码，也不会因短期 SSO Cookie 过期而反复发送验证邮件。建议在私聊中完成这一步。
 
 如果曾经把密码粘贴到群聊、公开日志或不可信终端里，建议立即修改统一认证密码。
 

@@ -188,7 +188,7 @@ async def test_sms_code_command_completes_pending_login_without_echoing_code():
     wait_task = asyncio.create_task(
         plugin._wait_for_sms_code(
             login_event,
-            module.SmsCodeContext(masked_phone="138****8000"),
+            module.SmsCodeContext(masked_phone="stud****@bit.edu.cn", channel="email"),
         )
     )
     await asyncio.sleep(0)
@@ -200,6 +200,7 @@ async def test_sms_code_command_completes_pending_login_without_echoing_code():
     results = [item async for item in plugin.submit_sms_code(code_event, "123456")]
 
     assert await wait_task == "123456"
+    assert "邮箱验证码已发送至 stud****@bit.edu.cn" in login_event.sent[0]
     assert "/lexue code <验证码>" in login_event.sent[0]
     assert results == ["已接收验证码，正在完成乐学授权。"]
     assert "123456" not in results[0]

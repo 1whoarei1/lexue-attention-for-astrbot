@@ -20,9 +20,10 @@ LOGIN_HTML = """
 """
 
 SECOND_FACTOR_HTML = """
-<form id="secondSmsLoginForm" action="/cas/login">
+<form id="secondMailLoginForm" action="/cas/login">
   <span id="login-page-flowkey">flow-2</span>
   <span id="user-object-id">user-object</span>
+  <span id="second-auth-user-id">student-id</span>
 </form>
 """
 
@@ -63,15 +64,9 @@ async def test_v4_password_login_follows_lexue_service_ticket():
 
 
 @pytest.mark.asyncio
-async def test_v4_second_factor_submits_sms_code(monkeypatch):
+async def test_v4_second_factor_submits_email_code():
     requests: list[httpx.Request] = []
     login_posts = 0
-
-    async def fake_phone(self, user_object_id: str):
-        assert user_object_id == "user-object"
-        return {"tel": "opaque-phone", "maskTel": "138****8000"}
-
-    monkeypatch.setattr(BitSsoV4Client, "_second_factor_phone", fake_phone)
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal login_posts
@@ -85,29 +80,36 @@ async def test_v4_second_factor_submits_sms_code(monkeypatch):
             if login_posts == 1:
                 return httpx.Response(200, text=SECOND_FACTOR_HTML)
             form = request.content.decode("utf-8")
-            assert "type=smsLogin" in form
+            assert "username=student-id" in form
+            assert "type=mailLogin" in form
             assert "password=123456" in form
             return httpx.Response(
                 302,
-                headers={"Location": "https://lexue.example/login/index.php?ticket=ST-SMS"},
+                headers={"Location": "https://lexue.example/login/index.php?ticket=ST-MAIL"},
             )
-        if request.url.path.endswith("/sendSmsCode"):
-            assert json.loads(request.content) == {"phone": "opaque-phone", "businessNo": "0008"}
-            return httpx.Response(200, json={"code": 200})
-        if request.url.path.endswith("/checkToken"):
+        if request.url.path.endswith("/findMail"):
+            assert json.loads(request.content) == {"userId": "user-object"}
+            return httpx.Response(200, json={"code": 200, "data": "student@bit.edu.cn"})
+        if request.url.path.endswith("/sendMailCode4SecondAuth"):
             assert json.loads(request.content) == {
-                "phone": "opaque-phone",
+                "type": "DEFAULT",
+                "mbemail": "student@bit.edu.cn",
+                "businessNo": "2025031701",
+            }
+            return httpx.Response(200, json={"code": 200, "data": {"result": True}})
+        if request.url.path.endswith("/checkTokenResult"):
+            assert json.loads(request.content) == {
+                "email": "student@bit.edu.cn",
                 "token": "123456",
-                "delete": False,
-                "trustDevice": False,
+                "deleteFlag": False,
             }
             return httpx.Response(200, json={"code": 200})
         return httpx.Response(200, text='<script>var M = {"sesskey":"ok"};</script>')
 
-    seen_masked_phone: list[str] = []
+    seen_contexts: list[tuple[str, str]] = []
 
     async def sms_callback(context):
-        seen_masked_phone.append(context.masked_phone)
+        seen_contexts.append((context.channel, context.masked_phone))
         return "123456"
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as session:
@@ -118,19 +120,14 @@ async def test_v4_second_factor_submits_sms_code(monkeypatch):
             sms_code_callback=sms_callback,
         )
 
-    assert final_url.endswith("ticket=ST-SMS")
-    assert seen_masked_phone == ["138****8000"]
-    assert any(request.url.path.endswith("/sendSmsCode") for request in requests)
+    assert final_url.endswith("ticket=ST-MAIL")
+    assert seen_contexts == [("email", "stud****@bit.edu.cn")]
+    assert any(request.url.path.endswith("/sendMailCode4SecondAuth") for request in requests)
 
 
 @pytest.mark.asyncio
-async def test_v4_second_factor_without_callback_does_not_send_sms(monkeypatch):
+async def test_v4_second_factor_without_callback_does_not_send_email_code():
     requests: list[httpx.Request] = []
-
-    async def fake_phone(self, user_object_id: str):
-        return {"tel": "opaque-phone", "maskTel": "138****8000"}
-
-    monkeypatch.setattr(BitSsoV4Client, "_second_factor_phone", fake_phone)
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
@@ -140,7 +137,9 @@ async def test_v4_second_factor_without_callback_does_not_send_sms(monkeypatch):
             return httpx.Response(200, json={"code": 200, "data": {"captchaInvisible": False}})
         if request.method == "POST" and request.url.path == "/cas/login":
             return httpx.Response(200, text=SECOND_FACTOR_HTML)
-        raise AssertionError("SMS endpoint must not be called without an interactive callback")
+        if request.url.path.endswith("/findMail"):
+            return httpx.Response(200, json={"code": 200, "data": "student@bit.edu.cn"})
+        raise AssertionError("email code must not be sent without an interactive callback")
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as session:
         with pytest.raises(SmsVerificationRequired, match="/lexue login"):
@@ -150,7 +149,7 @@ async def test_v4_second_factor_without_callback_does_not_send_sms(monkeypatch):
                 "https://lexue.example/login/index.php",
             )
 
-    assert not any(request.url.path.endswith("/sendSmsCode") for request in requests)
+    assert not any(request.url.path.endswith("/sendMailCode4SecondAuth") for request in requests)
 
 
 @pytest.mark.asyncio

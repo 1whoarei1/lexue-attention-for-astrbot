@@ -29,7 +29,7 @@ def main() -> None:
     fetch.add_argument("--username", help="BIT SSO username. Defaults to BIT_SSO_USERNAME.")
     fetch.add_argument("--password", help="BIT SSO password. Prefer BIT_SSO_PASSWORD or --ask-password.")
     fetch.add_argument("--ask-password", action="store_true", help="Prompt for the BIT SSO password without echo.")
-    fetch.add_argument("--ask-sms-code", action="store_true", help="Prompt for an SMS second-factor code when required.")
+    fetch.add_argument("--ask-sms-code", action="store_true", help="Prompt for an email second-factor code when required.")
     fetch.add_argument("--lexue-base-url")
     fetch.add_argument("--auth-method", choices=("android", "ticket", "page"), default="android")
     fetch.add_argument("--debug-login", action="store_true", help="Print non-sensitive login progress details.")
@@ -48,7 +48,7 @@ def main() -> None:
     sync.add_argument("--username", help="BIT SSO username. Defaults to BIT_SSO_USERNAME.")
     sync.add_argument("--password", help="BIT SSO password. Prefer BIT_SSO_PASSWORD or --ask-password.")
     sync.add_argument("--ask-password", action="store_true", help="Prompt for the BIT SSO password without echo.")
-    sync.add_argument("--ask-sms-code", action="store_true", help="Prompt for an SMS second-factor code when required.")
+    sync.add_argument("--ask-sms-code", action="store_true", help="Prompt for an email second-factor code when required.")
     sync.add_argument("--lexue-base-url")
     sync.add_argument("--auth-method", choices=("android", "ticket", "page"), default="android")
     sync.add_argument("--json", action="store_true", help="Print JSON summary.")
@@ -206,9 +206,10 @@ def _sms_code_callback(args: argparse.Namespace):
         return None
 
     async def request_code(context) -> str:
+        channel = "email" if getattr(context, "channel", "sms") == "email" else "SMS"
         return await asyncio.to_thread(
             getpass.getpass,
-            f"BIT SSO SMS code ({context.masked_phone}): ",
+            f"BIT SSO {channel} code ({context.masked_phone}): ",
         )
 
     return request_code

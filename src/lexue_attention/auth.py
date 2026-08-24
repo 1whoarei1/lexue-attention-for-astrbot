@@ -25,12 +25,15 @@ class AuthError(RuntimeError):
 
 
 class SmsVerificationRequired(AuthError):
-    """Raised when password login needs an interactive SMS code."""
+    """Raised when password login needs an interactive verification code."""
 
-    def __init__(self, masked_phone: str):
+    def __init__(self, masked_phone: str, channel: str = "sms"):
         self.masked_phone = masked_phone
+        self.channel = channel
+        channel_name = "邮箱" if channel == "email" else "短信"
         super().__init__(
-            f"统一身份认证需要短信二次验证（{masked_phone}），请使用 /lexue login 完成授权。"
+            f"统一身份认证需要{channel_name}二次验证（{masked_phone}），"
+            "请使用 /lexue login 完成授权。"
         )
 
 
@@ -42,6 +45,7 @@ class CaptchaRequired(AuthError):
 class SmsCodeContext:
     masked_phone: str
     purpose: str = "password_second_factor"
+    channel: str = "sms"
 
 
 SmsCodeCallback = Callable[[SmsCodeContext], Awaitable[str]]
@@ -69,7 +73,7 @@ _FINGERPRINT_RESOLUTION = [956, 1470]
 
 @dataclass(slots=True)
 class BitSsoV4Client:
-    """BIT SSO password + SMS flow ported from BIT-Login v4.0.2."""
+    """BIT SSO password + verification-code flow based on BIT-Login v4.0.2."""
 
     session: httpx.AsyncClient
     base_url: str = "https://sso.bit.edu.cn"
@@ -88,7 +92,7 @@ class BitSsoV4Client:
         sms_code_callback: SmsCodeCallback | None = None,
         trust_device: bool = False,
     ) -> str:
-        """Establish the target service session, requesting SMS when required."""
+        """Establish the target service session, requesting a code when required."""
 
         username = username.strip()
         if not username or not password:
@@ -115,7 +119,7 @@ class BitSsoV4Client:
         captcha_data = captcha.get("data") if isinstance(captcha.get("data"), dict) else {}
         if _json_truthy(captcha_data.get("captchaInvisible")):
             raise CaptchaRequired(
-                "统一身份认证要求图形验证码，当前机器人登录仅支持默认的短信二次验证流程。"
+                "统一身份认证要求图形验证码，当前机器人登录仅支持默认的邮箱二次验证流程。"
             )
 
         form = {
@@ -156,45 +160,49 @@ class BitSsoV4Client:
         trust_device: bool,
     ) -> httpx.Response:
         self._login_referer = f"{self.base_url}/cas/"
-        phone_data = await self._second_factor_phone(page["user_object_id"])
-        opaque_phone = str(phone_data.get("tel") or page.get("phone") or "").strip()
-        masked_phone = str(phone_data.get("maskTel") or "绑定手机").strip()
-        if not opaque_phone:
-            raise AuthError("统一身份认证未返回已绑定手机标识")
+        email = await self._second_factor_email(page)
+        masked_email = _mask_email(email)
         if callback is None:
-            raise SmsVerificationRequired(masked_phone)
+            raise SmsVerificationRequired(masked_email, channel="email")
 
         sent = await self._request_json(
             "POST",
-            f"{self.base_url}/cas/api/protected/sms/publicNoToken/sendSmsCode",
-            json_body={"phone": opaque_phone, "businessNo": "0008"},
+            f"{self.base_url}/cas/api/protected/mail/publicNoToken/sendMailCode4SecondAuth",
+            json_body={
+                "type": "DEFAULT",
+                "mbemail": email,
+                "businessNo": "2025031701",
+            },
         )
-        if _response_code(sent) != 200 and not _sms_code_remains_valid(sent):
-            raise AuthError(_response_message(sent) or "短信验证码发送失败")
+        sent_data = sent.get("data")
+        sent_rejected = isinstance(sent_data, dict) and sent_data.get("result") is False
+        if (_response_code(sent) != 200 or sent_rejected) and not _sms_code_remains_valid(sent):
+            raise AuthError(_response_message(sent) or "邮箱验证码发送失败")
 
-        code = (await callback(SmsCodeContext(masked_phone=masked_phone))).strip()
+        code = (
+            await callback(SmsCodeContext(masked_phone=masked_email, channel="email"))
+        ).strip()
         if not re.fullmatch(r"\d{4,8}", code):
-            raise AuthError("短信验证码格式无效")
+            raise AuthError("邮箱验证码格式无效")
 
         checked = await self._request_json(
             "POST",
-            f"{self.base_url}/cas/api/protected/sms/checkToken",
+            f"{self.base_url}/cas/api/protected/mail/publicNoToken/checkTokenResult",
             json_body={
-                "phone": opaque_phone,
+                "email": email,
                 "token": code,
-                "delete": False,
-                "trustDevice": trust_device,
+                "deleteFlag": False,
             },
         )
         if _response_code(checked) != 200:
-            raise AuthError(_response_message(checked) or "短信验证码错误或已失效")
+            raise AuthError(_response_message(checked) or "邮箱验证码错误或已失效")
 
         response = await self._login_post(
             page["form_action"],
             {
-                "username": username,
+                "username": page.get("user_id") or username,
                 "password": code,
-                "type": "smsLogin",
+                "type": "mailLogin",
                 "_eventId": "submit",
                 "geolocation": "",
                 "execution": page["execution"],
@@ -202,8 +210,29 @@ class BitSsoV4Client:
                 "trustDevice": str(trust_device).lower(),
             },
         )
-        self._raise_if_login_rejected(response, "短信验证码错误或已失效，请重新发起登录")
+        self._raise_if_login_rejected(response, "邮箱验证码错误或已失效，请重新发起登录")
         return response
+
+    async def _second_factor_email(self, page: dict[str, str]) -> str:
+        page_email = str(page.get("email") or "").strip()
+        response = await self._request_json(
+            "POST",
+            f"{self.base_url}/cas/api/protected/mail/publicNoToken/findMail",
+            json_body={"userId": page["user_object_id"]},
+        )
+        data = response.get("data")
+        if isinstance(data, str):
+            email = data.strip()
+        elif isinstance(data, dict):
+            email = str(data.get("mbemail") or data.get("email") or data.get("mail") or "").strip()
+        else:
+            email = ""
+        email = email or page_email
+        if not email:
+            if _response_code(response) != 200:
+                raise AuthError(_response_message(response) or "统一身份认证查询绑定邮箱失败")
+            raise AuthError("统一身份认证账号未绑定可用邮箱")
+        return email
 
     async def _second_factor_phone(self, user_object_id: str) -> dict[str, object]:
         aes_key = os.urandom(16)
@@ -311,6 +340,7 @@ class BitSsoV4Client:
                 "normalLoginForm",
                 "smsLoginForm",
                 "secondSmsLoginForm",
+                "secondMailLoginForm",
                 "cas-gateway",
             )
         )
@@ -375,7 +405,10 @@ class BitSsoV4Client:
 
 def _parse_second_factor_page(response: httpx.Response) -> dict[str, str] | None:
     html = response.text
-    if not any(marker in html for marker in ("secondSmsLoginForm", "second-auth-tip", "cas-gateway")):
+    if not any(
+        marker in html
+        for marker in ("secondSmsLoginForm", "secondMailLoginForm", "second-auth-tip", "cas-gateway")
+    ):
         return None
     soup = BeautifulSoup(html, "html.parser")
     execution = _optional_text(soup, "#login-page-flowkey")
@@ -387,7 +420,9 @@ def _parse_second_factor_page(response: httpx.Response) -> dict[str, str] | None
     return {
         "execution": execution,
         "user_object_id": user_object_id,
+        "user_id": _optional_text(soup, "#second-auth-user-id"),
         "phone": _optional_text(soup, "#phone-number"),
+        "email": _optional_text(soup, "#user-email-value"),
         "form_action": urljoin(str(response.url), action or "login"),
     }
 
@@ -426,6 +461,14 @@ def _response_message(value: dict[str, object]) -> str:
 def _sms_code_remains_valid(value: dict[str, object]) -> bool:
     message = _response_message(value)
     return "验证码" in message and "有效期内" in message and "重复发送" in message
+
+
+def _mask_email(email: str) -> str:
+    local, separator, domain = email.partition("@")
+    if not separator:
+        return "绑定邮箱"
+    visible = local[:4]
+    return f"{visible}****@{domain}"
 
 
 def _aes_encrypt(plaintext: bytes, key: bytes) -> bytes:

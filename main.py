@@ -33,7 +33,7 @@ from lexue_attention.core import create_calendar_subscription, fetch_events, syn
 PLUGIN_NAME = "astrbot_plugin_lexue_attention"
 PLUGIN_AUTHOR = "lexue-attention"
 PLUGIN_DESC = "BIT 乐学 DDL 查询、同步和定时提醒插件。"
-PLUGIN_VERSION = "1.5.1"
+PLUGIN_VERSION = "1.5.2"
 IMAGE_RENDER_COOLDOWN_MINUTES = 30
 CUSTOM_T2I_IMAGE_TTL_DAYS = 7
 DEFAULT_T2I_ENDPOINT = "astrbot"
@@ -333,8 +333,8 @@ class LexueAttentionPlugin(Star):
             "lexue-attention 指令：\n"
             "/lexue bind 绑定当前会话用于主动推送\n"
             "/lexue account <账号> <密码> 设置 BIT 统一认证账号密码\n"
-            "/lexue login 登录统一认证；需要时会等待短信验证码，并持久化乐学授权\n"
-            "/lexue code <验证码> 提交登录短信验证码\n"
+            "/lexue login 登录统一认证；需要时会等待邮箱验证码，并持久化乐学授权\n"
+            "/lexue code <验证码> 提交登录邮箱验证码\n"
             "/lexue calendar <ics地址> 设置乐学日历订阅地址\n"
             "/lexue daily <HH:MM> 设置每日 DDL 推送时间\n"
             "/lexue interval <分钟> 设置自动同步间隔\n"
@@ -369,7 +369,7 @@ class LexueAttentionPlugin(Star):
             yield event.plain_result("请先使用 /lexue account <账号> <密码> 保存统一认证账号密码。")
             return
         if self._login_lock.locked():
-            yield event.plain_result("已有乐学登录正在进行；如已收到短信，请使用 /lexue code <验证码>。")
+            yield event.plain_result("已有乐学登录正在进行；如已收到邮件，请使用 /lexue code <验证码>。")
             return
 
         login_error = ""
@@ -398,13 +398,13 @@ class LexueAttentionPlugin(Star):
         self._last_error = ""
         yield event.plain_result(
             "乐学授权成功，已持久化日历订阅权限并清除已保存密码。"
-            "后续查询、同步和重启不会重复要求短信验证码。"
+            "后续查询、同步和重启不会重复要求邮箱验证码。"
         )
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @lexue.command("code", alias={"验证码"})
     async def submit_sms_code(self, event: AstrMessageEvent, code: str):
-        """提交统一认证短信验证码。"""
+        """提交统一认证邮箱验证码。"""
         value = code.strip()
         if not re.fullmatch(r"\d{4,8}", value):
             yield event.plain_result("验证码应为 4-8 位数字。")
@@ -542,14 +542,14 @@ class LexueAttentionPlugin(Star):
         self._pending_sms_origin = str(event.unified_msg_origin)
         await event.send(
             event.plain_result(
-                f"统一身份认证验证码已发送至 {context.masked_phone}。"
+                f"统一身份认证邮箱验证码已发送至 {context.masked_phone}。"
                 "请在 3 分钟内发送 /lexue code <验证码>。"
             )
         )
         try:
             return await asyncio.wait_for(pending, timeout=180)
         except TimeoutError as exc:
-            raise AuthError("等待短信验证码超时，请重新发送 /lexue login") from exc
+            raise AuthError("等待邮箱验证码超时，请重新发送 /lexue login") from exc
         finally:
             if self._pending_sms_code is pending:
                 self._pending_sms_code = None
