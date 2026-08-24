@@ -13,7 +13,6 @@ from astrbot.api import message_components as Comp
 from astrbot.api.star import Context, Star, register
 from astrbot.core.star.filter.command import GreedyStr
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
-from astrbot.core.utils.session_waiter import SessionController, session_waiter
 
 _PLUGIN_ROOT = Path(__file__).resolve().parent
 _SRC_PATH = _PLUGIN_ROOT / "src"
@@ -34,7 +33,7 @@ from lexue_attention.core import create_calendar_subscription, fetch_events, syn
 PLUGIN_NAME = "astrbot_plugin_lexue_attention"
 PLUGIN_AUTHOR = "lexue-attention"
 PLUGIN_DESC = "BIT 乐学 DDL 查询、同步和定时提醒插件。"
-PLUGIN_VERSION = "1.5.0"
+PLUGIN_VERSION = "1.5.1"
 IMAGE_RENDER_COOLDOWN_MINUTES = 30
 CUSTOM_T2I_IMAGE_TTL_DAYS = 7
 DEFAULT_T2I_ENDPOINT = "astrbot"
@@ -311,6 +310,9 @@ class LexueAttentionPlugin(Star):
         self._sync_task: asyncio.Task | None = None
         self._daily_task: asyncio.Task | None = None
         self._sync_lock = asyncio.Lock()
+        self._login_lock = asyncio.Lock()
+        self._pending_sms_code: asyncio.Future[str] | None = None
+        self._pending_sms_origin = ""
         self._last_daily_key = ""
         self._last_error = ""
         self._image_render_disabled_until: datetime | None = None
@@ -319,6 +321,8 @@ class LexueAttentionPlugin(Star):
         self._restart_background_tasks()
 
     async def terminate(self) -> None:
+        if self._pending_sms_code is not None and not self._pending_sms_code.done():
+            self._pending_sms_code.cancel()
         await self._cancel_background_tasks()
 
     @filter.permission_type(filter.PermissionType.ADMIN)
@@ -330,6 +334,7 @@ class LexueAttentionPlugin(Star):
             "/lexue bind 绑定当前会话用于主动推送\n"
             "/lexue account <账号> <密码> 设置 BIT 统一认证账号密码\n"
             "/lexue login 登录统一认证；需要时会等待短信验证码，并持久化乐学授权\n"
+            "/lexue code <验证码> 提交登录短信验证码\n"
             "/lexue calendar <ics地址> 设置乐学日历订阅地址\n"
             "/lexue daily <HH:MM> 设置每日 DDL 推送时间\n"
             "/lexue interval <分钟> 设置自动同步间隔\n"
@@ -363,19 +368,27 @@ class LexueAttentionPlugin(Star):
         if not config.username or not config.password:
             yield event.plain_result("请先使用 /lexue account <账号> <密码> 保存统一认证账号密码。")
             return
+        if self._login_lock.locked():
+            yield event.plain_result("已有乐学登录正在进行；如已收到短信，请使用 /lexue code <验证码>。")
+            return
 
-        try:
-            calendar_url = await create_calendar_subscription(
-                config.username,
-                config.password,
-                config.lexue_base_url,
-                sms_code_callback=lambda context: self._wait_for_sms_code(event, context),
-            )
-        except Exception as exc:
-            message = _format_error(exc)
-            self._last_error = message
-            logger.error("lexue-attention interactive login failed: %s", message)
-            yield event.plain_result(f"乐学授权失败：{message}")
+        login_error = ""
+        calendar_url = ""
+        async with self._login_lock:
+            try:
+                calendar_url = await create_calendar_subscription(
+                    config.username,
+                    config.password,
+                    config.lexue_base_url,
+                    sms_code_callback=lambda context: self._wait_for_sms_code(event, context),
+                )
+            except Exception as exc:
+                login_error = _format_error(exc)
+                self._last_error = login_error
+                logger.error("lexue-attention interactive login failed: %s", login_error)
+
+        if login_error:
+            yield event.plain_result(f"乐学授权失败：{login_error}")
             return
 
         self.config["calendar_url"] = calendar_url
@@ -387,6 +400,26 @@ class LexueAttentionPlugin(Star):
             "乐学授权成功，已持久化日历订阅权限并清除已保存密码。"
             "后续查询、同步和重启不会重复要求短信验证码。"
         )
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @lexue.command("code", alias={"验证码"})
+    async def submit_sms_code(self, event: AstrMessageEvent, code: str):
+        """提交统一认证短信验证码。"""
+        value = code.strip()
+        if not re.fullmatch(r"\d{4,8}", value):
+            yield event.plain_result("验证码应为 4-8 位数字。")
+            return
+
+        pending = self._pending_sms_code
+        if pending is None or pending.done():
+            yield event.plain_result("当前没有等待验证码的乐学登录，请先发送 /lexue login。")
+            return
+        if str(event.unified_msg_origin) != self._pending_sms_origin:
+            yield event.plain_result("请在发起 /lexue login 的同一会话中提交验证码。")
+            return
+
+        pending.set_result(value)
+        yield event.plain_result("已接收验证码，正在完成乐学授权。")
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @lexue.command("calendar", alias={"日历"})
@@ -504,44 +537,23 @@ class LexueAttentionPlugin(Star):
         event: AstrMessageEvent,
         context: SmsCodeContext,
     ) -> str:
-        code = ""
-        cancelled = False
-
-        @session_waiter(timeout=180, record_history_chains=False)
-        async def sms_waiter(controller: SessionController, reply_event: AstrMessageEvent):
-            nonlocal code, cancelled
-            value = reply_event.message_str.strip()
-            if value in {"取消", "退出", "cancel"}:
-                cancelled = True
-                controller.stop()
-                return
-            if not re.fullmatch(r"\d{4,8}", value):
-                await reply_event.send(
-                    reply_event.plain_result("验证码应为 4-8 位数字；请重新输入，或发送“取消”。")
-                )
-                controller.keep(timeout=180, reset_timeout=True)
-                return
-            code = value
-            controller.stop()
-
+        pending = asyncio.get_running_loop().create_future()
+        self._pending_sms_code = pending
+        self._pending_sms_origin = str(event.unified_msg_origin)
         await event.send(
             event.plain_result(
                 f"统一身份认证验证码已发送至 {context.masked_phone}。"
-                "请在 3 分钟内直接发送验证码，或发送“取消”。"
+                "请在 3 分钟内发送 /lexue code <验证码>。"
             )
         )
         try:
-            await sms_waiter(event)
+            return await asyncio.wait_for(pending, timeout=180)
         except TimeoutError as exc:
             raise AuthError("等待短信验证码超时，请重新发送 /lexue login") from exc
         finally:
-            event.stop_event()
-
-        if cancelled:
-            raise AuthError("已取消短信验证")
-        if not code:
-            raise AuthError("未收到短信验证码")
-        return code
+            if self._pending_sms_code is pending:
+                self._pending_sms_code = None
+                self._pending_sms_origin = ""
 
     async def _run_sync(self):
         config = self._plugin_config()

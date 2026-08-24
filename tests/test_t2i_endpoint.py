@@ -1,3 +1,4 @@
+import asyncio
 import importlib.util
 import sys
 import types
@@ -16,7 +17,6 @@ def _load_plugin_main():
         components = types.ModuleType("astrbot.api.message_components")
         command = types.ModuleType("astrbot.core.star.filter.command")
         path_mod = types.ModuleType("astrbot.core.utils.astrbot_path")
-        session_waiter_mod = types.ModuleType("astrbot.core.utils.session_waiter")
 
         api.AstrBotConfig = dict
         api.logger = types.SimpleNamespace(
@@ -32,8 +32,6 @@ def _load_plugin_main():
         star.register = lambda *a, **k: (lambda cls: cls)
         command.GreedyStr = str
         path_mod.get_astrbot_data_path = lambda: "."
-        session_waiter_mod.SessionController = object
-        session_waiter_mod.session_waiter = lambda *a, **k: (lambda func: func)
 
         class _Filter:
             class PermissionType:
@@ -66,7 +64,6 @@ def _load_plugin_main():
         sys.modules["astrbot.api.message_components"] = components
         sys.modules["astrbot.core.star.filter.command"] = command
         sys.modules["astrbot.core.utils.astrbot_path"] = path_mod
-        sys.modules["astrbot.core.utils.session_waiter"] = session_waiter_mod
 
     module_path = Path(__file__).resolve().parents[1] / "main.py"
     spec = importlib.util.spec_from_file_location("lexue_plugin_main_for_test", module_path)
@@ -145,6 +142,7 @@ async def test_successful_interactive_login_persists_calendar_and_clears_passwor
     plugin = module.LexueAttentionPlugin.__new__(module.LexueAttentionPlugin)
     plugin.config = {"password": "private-password"}
     plugin._last_error = "old error"
+    plugin._login_lock = asyncio.Lock()
     plugin._plugin_config = lambda: types.SimpleNamespace(
         username="student",
         password="private-password",
@@ -165,3 +163,62 @@ async def test_successful_interactive_login_persists_calendar_and_clears_passwor
     assert plugin.config["password"] == ""
     assert saved == [True]
     assert "清除已保存密码" in results[0]
+
+
+@pytest.mark.asyncio
+async def test_sms_code_command_completes_pending_login_without_echoing_code():
+    module = _load_plugin_main()
+    plugin = module.LexueAttentionPlugin.__new__(module.LexueAttentionPlugin)
+    plugin._pending_sms_code = None
+    plugin._pending_sms_origin = ""
+
+    class LoginEvent:
+        unified_msg_origin = "qq:private:student"
+
+        def __init__(self):
+            self.sent: list[str] = []
+
+        def plain_result(self, text):
+            return text
+
+        async def send(self, result):
+            self.sent.append(result)
+
+    login_event = LoginEvent()
+    wait_task = asyncio.create_task(
+        plugin._wait_for_sms_code(
+            login_event,
+            module.SmsCodeContext(masked_phone="138****8000"),
+        )
+    )
+    await asyncio.sleep(0)
+
+    code_event = types.SimpleNamespace(
+        unified_msg_origin="qq:private:student",
+        plain_result=lambda text: text,
+    )
+    results = [item async for item in plugin.submit_sms_code(code_event, "123456")]
+
+    assert await wait_task == "123456"
+    assert "/lexue code <验证码>" in login_event.sent[0]
+    assert results == ["已接收验证码，正在完成乐学授权。"]
+    assert "123456" not in results[0]
+    assert plugin._pending_sms_code is None
+
+
+@pytest.mark.asyncio
+async def test_sms_code_command_requires_pending_login_in_same_session():
+    module = _load_plugin_main()
+    plugin = module.LexueAttentionPlugin.__new__(module.LexueAttentionPlugin)
+    plugin._pending_sms_code = asyncio.get_running_loop().create_future()
+    plugin._pending_sms_origin = "qq:private:owner"
+
+    wrong_event = types.SimpleNamespace(
+        unified_msg_origin="qq:group:other",
+        plain_result=lambda text: text,
+    )
+    results = [item async for item in plugin.submit_sms_code(wrong_event, "123456")]
+
+    assert results == ["请在发起 /lexue login 的同一会话中提交验证码。"]
+    assert not plugin._pending_sms_code.done()
+    plugin._pending_sms_code.cancel()
