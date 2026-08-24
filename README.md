@@ -2,7 +2,7 @@
 
 `lexue-attention` 是一个 AstrBot 插件，也可以作为独立 Python 工具使用。它用于获取 BIT 乐学作业 DDL，支持手动查询、状态同步、每日主动推送和 DDL 前提醒。
 
-当前登录流程参考了 `BIT101-Android` 中可复用的部分：先登录 BIT 统一认证，保留同一会话 Cookie，再访问乐学并导出 iCalendar 订阅。
+当前登录流程对齐 `BIT101-Android` 使用的 `BIT-Login v4.0.2`：先提交统一认证账号密码，按需完成绑定手机号的短信二次验证，再建立乐学会话并导出 iCalendar 订阅。订阅地址持久化后，机器人重启和定时同步不需要重复登录。
 
 ## 功能
 
@@ -76,6 +76,7 @@ Copy-Item -Recurse .\astrbot_plugin_lexue_attention <AstrBot>\data\plugins\astrb
 ```text
 /lexue bind
 /lexue account <学号> <统一认证密码>
+/lexue login
 /lexue daily 08:30
 /lexue interval 60
 /lexue sync
@@ -86,7 +87,7 @@ Copy-Item -Recurse .\astrbot_plugin_lexue_attention <AstrBot>\data\plugins\astrb
 插件的“主动回复”实际是定时主动推送，不需要用户每天触发命令。必须满足三个条件：
 
 1. 在目标群聊或私聊中发送 `/lexue bind`。
-2. 设置数据来源：`/lexue calendar <ics地址>` 或 `/lexue account <学号> <密码>`。
+2. 设置数据来源：`/lexue calendar <ics地址>`，或先 `/lexue account <学号> <密码>` 再 `/lexue login` 完成短信验证。
 3. 开启每日推送或间隔同步。
 
 每日固定时间推送当前 DDL：
@@ -145,10 +146,10 @@ Copy-Item -Recurse .\astrbot_plugin_lexue_attention <AstrBot>\data\plugins\astrb
 
 ```text
 enable_image_mode = true
-t2i_endpoint = official
+t2i_endpoint = astrbot
 ```
 
-`t2i_endpoint` 默认是 `official`，表示直接使用 AstrBot 官方文转图服务器。也可以填写自建文转图服务地址，例如：
+`t2i_endpoint` 默认是 `astrbot`，表示使用 AstrBot 内置的 `html_render` 和全局文转图配置。也可以填写自建文转图服务地址，例如：
 
 ```text
 t2i_endpoint = http://127.0.0.1:8999
@@ -163,10 +164,10 @@ http://127.0.0.1:8999/text2img
 
 如果使用我整理的一键脚本，执行 `~/start_services.sh` 后，本机自建文转图服务地址就是 `http://127.0.0.1:8999`。
 
-如果希望继续走 AstrBot 的全局文转图配置，可以填写：
+如果希望绕过 AstrBot 全局配置、直接使用官方文转图服务器，可以填写：
 
 ```text
-t2i_endpoint = astrbot
+t2i_endpoint = official
 ```
 
 ## 管理员权限
@@ -187,6 +188,7 @@ t2i_endpoint = astrbot
 - `/lexue help`：查看插件帮助。
 - `/lexue bind`：绑定当前群聊或私聊，用于主动推送。
 - `/lexue account <账号> <密码>`：保存 BIT 统一认证账号和密码。
+- `/lexue login`：使用新统一认证流程登录；需要时等待短信验证码，成功后持久化乐学订阅权限。
 - `/lexue calendar <ics地址>`：保存乐学 iCalendar 订阅地址。
 - `/lexue daily <HH:MM>`：设置每日 DDL 推送时间，并开启每日推送。
 - `/lexue interval <分钟>`：设置自动同步间隔，并开启间隔同步，最小 5 分钟。
@@ -198,6 +200,7 @@ t2i_endpoint = astrbot
 
 - `/乐学 帮助`
 - `/乐学 绑定`
+- `/乐学 登录`
 - `/乐学 日历 <ics地址>`
 - `/乐学 每日 08:30`
 - `/乐学 间隔 60`
@@ -213,14 +216,14 @@ t2i_endpoint = astrbot
 - `password`：BIT 统一认证密码。
 - `calendar_url`：乐学 iCalendar 订阅地址。推荐优先使用。
 - `lexue_base_url`：乐学站点地址，默认 `https://lexue.bit.edu.cn`。
-- `auth_method`：登录方式，默认 `android`。
+- `auth_method`：登录方式，默认 `android`，对应 BIT-Login v4 密码及短信二次验证流程；`ticket`、`page` 仅保留作旧流程诊断。
 - `push_session`：主动推送会话。通常由 `/lexue bind` 自动写入。
 - `daily_push_time`：每日 DDL 推送时间，格式为 `HH:MM`。
 - `enable_daily_push`：是否开启每日推送。
 - `check_interval_minutes`：自动同步间隔分钟数。
 - `enable_interval_sync`：是否开启间隔同步。
 - `enable_image_mode`：是否开启图片卡片模式。渲染失败时会自动回退纯文本。
-- `t2i_endpoint`：文转图服务器。默认 `official` 使用 AstrBot 官方服务器；自建服务可填写 `http://127.0.0.1:8999`；填写 `astrbot` 则走 AstrBot 全局配置。
+- `t2i_endpoint`：文转图服务器。默认 `astrbot` 使用 AstrBot 内置 `html_render` 和全局配置；填写 `official` 可直连官方服务器；自建服务可填写 `http://127.0.0.1:8999`。
 - `reminder_milestones_hours`：提前提醒小时数，例如 `[72, 24, 6]`。
 - `max_events`：单次最多展示的 DDL 数量。
 - `timezone`：时区，默认 `Asia/Shanghai`。
@@ -237,7 +240,10 @@ t2i_endpoint = astrbot
 
 ```text
 /lexue account <学号> <统一认证密码>
+/lexue login
 ```
+
+`/lexue login` 会在需要时把验证码发送到统一认证绑定手机号，并在当前会话等待输入。登录成功后，插件会清除配置中的统一认证密码，只保留学号和乐学 iCalendar 订阅地址；日常定时任务直接使用该地址，不保存短信验证码，也不会因短期 SSO Cookie 过期而反复发短信。建议在私聊中完成这一步。
 
 如果曾经把密码粘贴到群聊、公开日志或不可信终端里，建议立即修改统一认证密码。
 
@@ -300,7 +306,7 @@ $env:PYTHONPATH='src'
 使用账号密码获取 DDL：
 
 ```powershell
-python -m lexue_attention fetch --username "your_student_id" --ask-password --auth-method android --json
+python -m lexue_attention fetch --username "your_student_id" --ask-password --ask-sms-code --auth-method android --json
 ```
 
 使用环境变量测试：
@@ -308,13 +314,13 @@ python -m lexue_attention fetch --username "your_student_id" --ask-password --au
 ```powershell
 $env:BIT_SSO_USERNAME="your_student_id"
 $env:BIT_SSO_PASSWORD="your_password"
-python -m lexue_attention fetch --auth-method android --json
+python -m lexue_attention fetch --auth-method android --ask-sms-code --json
 ```
 
 同步本地状态：
 
 ```powershell
-python -m lexue_attention sync --username "your_student_id" --ask-password --auth-method android --json
+python -m lexue_attention sync --username "your_student_id" --ask-password --ask-sms-code --auth-method android --json
 ```
 
 登录诊断：

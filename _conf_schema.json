@@ -8,7 +8,7 @@
     "description": "BIT 统一认证密码",
     "type": "string",
     "default": "",
-    "hint": "建议优先使用 calendar_url，减少保存统一认证密码。"
+    "hint": "保存后使用 /lexue login 完成短信二次验证；成功后插件会持久化 calendar_url。"
   },
   "calendar_url": {
     "description": "乐学 iCalendar 订阅地址",
@@ -25,7 +25,8 @@
     "description": "登录方式",
     "type": "string",
     "default": "android",
-    "options": ["android", "ticket", "page"]
+    "options": ["android", "ticket", "page"],
+    "hint": "android 使用 BIT-Login v4 登录及短信二次验证；ticket/page 仅用于旧流程诊断。"
   },
   "push_session": {
     "description": "主动推送会话",
@@ -64,8 +65,8 @@
   "t2i_endpoint": {
     "description": "文转图服务器",
     "type": "string",
-    "default": "official",
-    "hint": "默认 official，直接使用 AstrBot 官方文转图服务器；填写自建服务地址时，格式如 http://127.0.0.1:8999；填写 astrbot 则走 AstrBot 全局配置。"
+    "default": "astrbot",
+    "hint": "默认 astrbot，使用 AstrBot 内置 html_render 和全局文转图配置；填写 official 可直连官方服务器；自建服务地址格式如 http://127.0.0.1:8999。"
   },
   "reminder_milestones_hours": {
     "description": "提醒提前小时数",

@@ -6,13 +6,14 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-import requests
+import httpx
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api import message_components as Comp
 from astrbot.api.star import Context, Star, register
 from astrbot.core.star.filter.command import GreedyStr
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
+from astrbot.core.utils.session_waiter import SessionController, session_waiter
 
 _PLUGIN_ROOT = Path(__file__).resolve().parent
 _SRC_PATH = _PLUGIN_ROOT / "src"
@@ -27,15 +28,16 @@ from lexue_attention.astrbot_adapter import (
     parse_hhmm,
     validate_fetch_config,
 )
-from lexue_attention.core import fetch_events, sync_events
+from lexue_attention.auth import AuthError, SmsCodeContext
+from lexue_attention.core import create_calendar_subscription, fetch_events, sync_events
 
 PLUGIN_NAME = "astrbot_plugin_lexue_attention"
 PLUGIN_AUTHOR = "lexue-attention"
 PLUGIN_DESC = "BIT 乐学 DDL 查询、同步和定时提醒插件。"
-PLUGIN_VERSION = "1.3.5"
+PLUGIN_VERSION = "1.5.0"
 IMAGE_RENDER_COOLDOWN_MINUTES = 30
 CUSTOM_T2I_IMAGE_TTL_DAYS = 7
-DEFAULT_T2I_ENDPOINT = "official"
+DEFAULT_T2I_ENDPOINT = "astrbot"
 OFFICIAL_T2I_ENDPOINT = "https://t2i.soulter.top/text2img"
 ASTRBOT_T2I_ENDPOINT = "astrbot"
 DDL_CARD_RENDER_WIDTH = 760
@@ -327,6 +329,7 @@ class LexueAttentionPlugin(Star):
             "lexue-attention 指令：\n"
             "/lexue bind 绑定当前会话用于主动推送\n"
             "/lexue account <账号> <密码> 设置 BIT 统一认证账号密码\n"
+            "/lexue login 登录统一认证；需要时会等待短信验证码，并持久化乐学授权\n"
             "/lexue calendar <ics地址> 设置乐学日历订阅地址\n"
             "/lexue daily <HH:MM> 设置每日 DDL 推送时间\n"
             "/lexue interval <分钟> 设置自动同步间隔\n"
@@ -350,7 +353,40 @@ class LexueAttentionPlugin(Star):
         self.config["username"] = username.strip()
         self.config["password"] = password
         self._save_config()
-        yield event.plain_result("已保存账号和密码。建议优先使用 calendar_url，减少保存统一认证密码。")
+        yield event.plain_result("已保存账号和密码。请继续发送 /lexue login 完成短信验证和持久授权。")
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @lexue.command("login", alias={"登录", "授权"})
+    async def login_lexue(self, event: AstrMessageEvent):
+        """登录统一认证并持久化乐学日历授权。"""
+        config = self._plugin_config()
+        if not config.username or not config.password:
+            yield event.plain_result("请先使用 /lexue account <账号> <密码> 保存统一认证账号密码。")
+            return
+
+        try:
+            calendar_url = await create_calendar_subscription(
+                config.username,
+                config.password,
+                config.lexue_base_url,
+                sms_code_callback=lambda context: self._wait_for_sms_code(event, context),
+            )
+        except Exception as exc:
+            message = _format_error(exc)
+            self._last_error = message
+            logger.error("lexue-attention interactive login failed: %s", message)
+            yield event.plain_result(f"乐学授权失败：{message}")
+            return
+
+        self.config["calendar_url"] = calendar_url
+        self.config["auth_method"] = "android"
+        self.config["password"] = ""
+        self._save_config()
+        self._last_error = ""
+        yield event.plain_result(
+            "乐学授权成功，已持久化日历订阅权限并清除已保存密码。"
+            "后续查询、同步和重启不会重复要求短信验证码。"
+        )
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @lexue.command("calendar", alias={"日历"})
@@ -397,9 +433,9 @@ class LexueAttentionPlugin(Star):
         config = self._plugin_config()
         try:
             validate_fetch_config(config)
-            events = await asyncio.to_thread(fetch_events, config.fetch_options())
+            events = await fetch_events(config.fetch_options())
         except Exception as exc:
-            logger.exception("lexue-attention fetch failed")
+            logger.error("lexue-attention fetch failed: %s", _format_error(exc))
             yield event.plain_result(f"获取 DDL 失败：{_format_error(exc)}")
             return
 
@@ -424,7 +460,7 @@ class LexueAttentionPlugin(Star):
         try:
             config, now, result = await self._run_sync()
         except Exception as exc:
-            logger.exception("lexue-attention manual sync failed")
+            logger.error("lexue-attention manual sync failed: %s", _format_error(exc))
             yield event.plain_result(f"同步 DDL 失败：{_format_error(exc)}")
             return
 
@@ -452,6 +488,7 @@ class LexueAttentionPlugin(Star):
             f"账号：{'已设置' if config.username else '未设置'}",
             f"密码：{'已设置' if config.password else '未设置'}",
             f"日历订阅：{'已设置' if config.calendar_url else '未设置'}",
+            f"持久授权：{'已建立' if config.calendar_url else '未建立'}",
             f"主动推送会话：{'已绑定' if push_session else '未绑定'}",
             f"每日推送：{'开启' if config.enable_daily_push else '关闭'} {config.daily_push_time}",
             f"自动同步：{'开启' if config.enable_interval_sync else '关闭'} {config.check_interval_minutes} 分钟",
@@ -462,13 +499,56 @@ class LexueAttentionPlugin(Star):
         ]
         yield event.plain_result("\n".join(lines))
 
+    async def _wait_for_sms_code(
+        self,
+        event: AstrMessageEvent,
+        context: SmsCodeContext,
+    ) -> str:
+        code = ""
+        cancelled = False
+
+        @session_waiter(timeout=180, record_history_chains=False)
+        async def sms_waiter(controller: SessionController, reply_event: AstrMessageEvent):
+            nonlocal code, cancelled
+            value = reply_event.message_str.strip()
+            if value in {"取消", "退出", "cancel"}:
+                cancelled = True
+                controller.stop()
+                return
+            if not re.fullmatch(r"\d{4,8}", value):
+                await reply_event.send(
+                    reply_event.plain_result("验证码应为 4-8 位数字；请重新输入，或发送“取消”。")
+                )
+                controller.keep(timeout=180, reset_timeout=True)
+                return
+            code = value
+            controller.stop()
+
+        await event.send(
+            event.plain_result(
+                f"统一身份认证验证码已发送至 {context.masked_phone}。"
+                "请在 3 分钟内直接发送验证码，或发送“取消”。"
+            )
+        )
+        try:
+            await sms_waiter(event)
+        except TimeoutError as exc:
+            raise AuthError("等待短信验证码超时，请重新发送 /lexue login") from exc
+        finally:
+            event.stop_event()
+
+        if cancelled:
+            raise AuthError("已取消短信验证")
+        if not code:
+            raise AuthError("未收到短信验证码")
+        return code
+
     async def _run_sync(self):
         config = self._plugin_config()
         validate_fetch_config(config)
         async with self._sync_lock:
             now = datetime.now(config.timezone)
-            result = await asyncio.to_thread(
-                sync_events,
+            result = await sync_events(
                 config.fetch_options(),
                 config.state_path,
                 now,
@@ -506,7 +586,7 @@ class LexueAttentionPlugin(Star):
             logger.warning(
                 "lexue-attention render ddl image failed, fallback to text for %s minutes: %s",
                 IMAGE_RENDER_COOLDOWN_MINUTES,
-                exc,
+                _format_error(exc),
             )
             return ""
 
@@ -515,9 +595,9 @@ class LexueAttentionPlugin(Star):
         options = _render_options(context)
         if endpoint == ASTRBOT_T2I_ENDPOINT:
             return await self.html_render(template, context, options=options)
-        return await asyncio.to_thread(self._render_with_custom_t2i, endpoint, template, context, options)
+        return await self._render_with_custom_t2i(endpoint, template, context, options)
 
-    def _render_with_custom_t2i(
+    async def _render_with_custom_t2i(
         self,
         endpoint: str,
         template: str,
@@ -532,36 +612,33 @@ class LexueAttentionPlugin(Star):
             "options": options,
         }
         render_url = f"{base_url}/generate" if base_url.endswith("/text2img") else f"{base_url}/text2img/generate"
-        response = requests.post(
-            render_url,
-            json=payload,
-            timeout=30,
-        )
-        response.raise_for_status()
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            response = await client.post(render_url, json=payload)
+            response.raise_for_status()
 
-        content_type = response.headers.get("content-type", "").lower()
-        if "application/json" in content_type:
-            data = response.json()
-            image_url = _image_url_from_t2i_json(base_url, data)
-            if image_url:
-                return self._download_custom_t2i_image(image_url)
-            raise RuntimeError(f"自定义文转图服务返回异常：{data}")
+            content_type = response.headers.get("content-type", "").lower()
+            if "application/json" in content_type:
+                data = response.json()
+                image_url = _image_url_from_t2i_json(base_url, data)
+                if image_url:
+                    return await self._download_custom_t2i_image(client, image_url)
+                raise RuntimeError(f"自定义文转图服务返回异常：{data}")
 
-        if not content_type.startswith("image/"):
-            raise RuntimeError(f"自定义文转图服务返回了非图片内容：{content_type or 'unknown'}")
+            if not content_type.startswith("image/"):
+                raise RuntimeError(f"自定义文转图服务返回了非图片内容：{content_type or 'unknown'}")
 
-        suffix = ".jpg" if "jpeg" in content_type or "jpg" in content_type else ".png"
-        output_path = self._custom_t2i_image_dir() / f"ddl_card_{uuid.uuid4().hex}{suffix}"
-        output_path.write_bytes(response.content)
-        return str(output_path)
+            suffix = ".jpg" if "jpeg" in content_type or "jpg" in content_type else ".png"
+            output_path = self._custom_t2i_image_dir() / f"ddl_card_{uuid.uuid4().hex}{suffix}"
+            await asyncio.to_thread(output_path.write_bytes, response.content)
+            return str(output_path)
 
-    def _download_custom_t2i_image(self, image_url: str) -> str:
-        response = requests.get(image_url, timeout=30)
+    async def _download_custom_t2i_image(self, client: httpx.AsyncClient, image_url: str) -> str:
+        response = await client.get(image_url)
         response.raise_for_status()
         content_type = response.headers.get("content-type", "").lower()
         suffix = ".jpg" if "jpeg" in content_type or "jpg" in content_type else ".png"
         output_path = self._custom_t2i_image_dir() / f"ddl_card_{uuid.uuid4().hex}{suffix}"
-        output_path.write_bytes(response.content)
+        await asyncio.to_thread(output_path.write_bytes, response.content)
         return str(output_path)
 
     def _custom_t2i_image_dir(self) -> Path:
@@ -665,7 +742,7 @@ class LexueAttentionPlugin(Star):
                 raise
             except Exception as exc:
                 self._last_error = _format_error(exc)
-                logger.exception("lexue-attention interval sync failed")
+                logger.error("lexue-attention interval sync failed: %s", _format_error(exc))
 
     async def _daily_loop(self) -> None:
         while True:
@@ -683,7 +760,7 @@ class LexueAttentionPlugin(Star):
                 if not is_same_minute(now, config.daily_push_time):
                     continue
                 self._last_daily_key = current_key
-                events = await asyncio.to_thread(fetch_events, config.fetch_options())
+                events = await fetch_events(config.fetch_options())
                 await self._send_event_list_to_bound_session(
                     events,
                     now,
@@ -695,7 +772,7 @@ class LexueAttentionPlugin(Star):
                 raise
             except Exception as exc:
                 self._last_error = _format_error(exc)
-                logger.exception("lexue-attention daily push failed")
+                logger.error("lexue-attention daily push failed: %s", _format_error(exc))
 
     def _restart_background_tasks(self) -> None:
         for task in (self._sync_task, self._daily_task):
@@ -773,10 +850,10 @@ def _safe_int(value: Any, default: int) -> int:
 def _normalize_t2i_endpoint(value: str) -> str:
     endpoint = str(value or "").strip()
     lowered = endpoint.lower()
-    if not endpoint or lowered in {"official", "default"}:
-        return OFFICIAL_T2I_ENDPOINT
-    if lowered in {"astrbot", "builtin", "internal"}:
+    if not endpoint or lowered in {"default", "astrbot", "builtin", "internal"}:
         return ASTRBOT_T2I_ENDPOINT
+    if lowered == "official":
+        return OFFICIAL_T2I_ENDPOINT
     return endpoint
 
 
@@ -928,11 +1005,17 @@ def _format_error(exc: Exception) -> str:
             "AstrBot HTML 转图服务当前不可用（HTTP 502）。"
             "插件已回退纯文本；可稍后重试或在 AstrBot 中配置可用的 t2i 服务。"
         )
-    if isinstance(exc, requests.exceptions.ConnectionError) and (
-        "NameResolutionError" in text or "Failed to resolve" in text
+    if isinstance(exc, httpx.ConnectError) and (
+        "name or service not known" in text.lower()
+        or "name resolution" in text.lower()
+        or "getaddrinfo failed" in text.lower()
     ):
         return (
             "AstrBot 运行环境无法解析乐学或统一认证域名。"
             "请在部署 AstrBot 的机器/容器里检查 DNS、网络、代理和校园网访问。"
         )
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"远程服务返回 HTTP {exc.response.status_code}。"
+    if isinstance(exc, httpx.RequestError):
+        return f"网络请求失败：{type(exc).__name__}。"
     return text

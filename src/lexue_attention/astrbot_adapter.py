@@ -13,7 +13,7 @@ from .models import DdlEvent
 DEFAULT_TIMEZONE = "Asia/Shanghai"
 DEFAULT_LEXUE_BASE_URL = "https://lexue.bit.edu.cn"
 DEFAULT_MILESTONES_HOURS = (72, 24, 6)
-DEFAULT_T2I_ENDPOINT = "official"
+DEFAULT_T2I_ENDPOINT = "astrbot"
 
 DDL_CARD_TEMPLATE = r"""
 <!doctype html>
@@ -363,9 +363,9 @@ def validate_fetch_config(config: AstrBotPluginConfig) -> None:
     if config.calendar_url:
         return
     if not config.username:
-        raise ValueError("缺少 BIT 统一认证账号。请使用 /lexue account 或配置 calendar_url。")
+        raise ValueError("缺少 BIT 统一认证账号。请使用 /lexue account，或直接配置 calendar_url。")
     if not config.password:
-        raise ValueError("缺少 BIT 统一认证密码。请使用 /lexue account 或配置 calendar_url。")
+        raise ValueError("缺少 BIT 统一认证密码。请使用 /lexue account，或直接配置 calendar_url。")
 
 
 def parse_hhmm(value: str) -> time:

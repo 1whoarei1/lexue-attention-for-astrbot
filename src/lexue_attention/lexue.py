@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from urllib.parse import urljoin
 
-import requests
+import httpx
 from bs4 import BeautifulSoup
 
 
@@ -21,12 +21,12 @@ class LexueClient:
     `.calendarurl` -> GET the generated `.ics` URL.
     """
 
-    session: requests.Session
+    session: httpx.AsyncClient
     base_url: str = "https://lexue.bit.edu.cn"
     request_timeout: float = 20.0
 
-    def get_sesskey(self) -> str:
-        response = self.session.get(urljoin(self.base_url, "/"), timeout=self.request_timeout)
+    async def get_sesskey(self) -> str:
+        response = await self.session.get(urljoin(self.base_url, "/"), timeout=self.request_timeout)
         response.raise_for_status()
 
         match = re.search(r"""["']sesskey["']\s*:\s*["']([^"']+)["']""", response.text)
@@ -34,9 +34,9 @@ class LexueClient:
             raise LexueError(_page_error("Lexue index page did not contain sesskey", response))
         return match.group(1)
 
-    def export_calendar_url(self, sesskey: str | None = None) -> str:
-        final_sesskey = sesskey or self.get_sesskey()
-        response = self.session.post(
+    async def export_calendar_url(self, sesskey: str | None = None) -> str:
+        final_sesskey = sesskey or await self.get_sesskey()
+        response = await self.session.post(
             urljoin(self.base_url, "/calendar/export.php"),
             data={
                 "sesskey": final_sesskey,
@@ -57,13 +57,13 @@ class LexueClient:
             raise LexueError(_page_error("Lexue calendar export page did not contain a calendar URL", response))
         return match.group(0)
 
-    def fetch_ics(self, calendar_url: str) -> str:
-        response = self.session.get(calendar_url, timeout=self.request_timeout)
+    async def fetch_ics(self, calendar_url: str) -> str:
+        response = await self.session.get(calendar_url, timeout=self.request_timeout)
         response.raise_for_status()
         return response.text
 
 
-def _page_error(message: str, response: requests.Response) -> str:
+def _page_error(message: str, response: httpx.Response) -> str:
     soup = BeautifulSoup(response.text, "html.parser")
     title = soup.title.get_text(" ", strip=True) if soup.title else ""
     return f"{message}; url={response.url}; title={title or '<none>'}"
