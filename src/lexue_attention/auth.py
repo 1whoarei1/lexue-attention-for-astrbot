@@ -223,11 +223,19 @@ class BitSsoV4Client:
 
     async def _second_factor_email(self, page: dict[str, str]) -> str:
         page_email = str(page.get("email") or "").strip()
-        response = await self._request_json(
-            "POST",
-            f"{self.base_url}/cas/api/protected/mail/publicNoToken/findMail",
-            json_body={"userId": page["user_object_id"]},
-        )
+        try:
+            response = await self._request_json(
+                "POST",
+                f"{self.base_url}/cas/api/protected/mail/publicNoToken/findMail",
+                json_body={"userId": page["user_object_id"]},
+            )
+        except (httpx.HTTPError, AuthError):
+            # The authenticated second-factor page already carries the bound
+            # email. BIT SSO's auxiliary findMail endpoint can temporarily
+            # return 5xx, so use the page value instead of aborting login.
+            if page_email:
+                return page_email
+            raise
         data = response.get("data")
         if isinstance(data, str):
             email = data.strip()

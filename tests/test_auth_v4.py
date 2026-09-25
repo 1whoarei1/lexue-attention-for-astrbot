@@ -126,6 +126,21 @@ async def test_v4_second_factor_submits_email_code():
 
 
 @pytest.mark.asyncio
+async def test_v4_second_factor_uses_page_email_when_lookup_fails():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/findMail")
+        return httpx.Response(503)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as session:
+        client = BitSsoV4Client(session, "https://sso.example")
+        email = await client._second_factor_email(
+            {"email": " student@bit.edu.cn ", "user_object_id": "user-object"}
+        )
+
+    assert email == "student@bit.edu.cn"
+
+
+@pytest.mark.asyncio
 async def test_v4_second_factor_without_callback_does_not_send_email_code():
     requests: list[httpx.Request] = []
 
