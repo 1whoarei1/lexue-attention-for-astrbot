@@ -51,7 +51,7 @@
     "type": "string",
     "default": "ics",
     "options": ["ics", "eclass"],
-    "hint": "ics 读取乐学日历订阅；eclass 登录课程中心并读取最近访问课程的作业。"
+    "hint": "ics 读取乐学日历订阅；eclass 登录课程中心并读取全部课程的作业。"
   },
   "push_session": {
     "description": "主动推送会话",

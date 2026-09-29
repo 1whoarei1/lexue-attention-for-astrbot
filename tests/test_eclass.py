@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -6,7 +7,6 @@ import pytest
 
 from lexue_attention.eclass import (
     EclassClient,
-    EclassCourse,
     EclassError,
     activity_to_event,
     parse_eclass_time,
@@ -14,15 +14,29 @@ from lexue_attention.eclass import (
 
 
 @pytest.mark.asyncio
-async def test_fetch_courses_and_course_activities():
+async def test_fetch_all_courses_and_course_homework():
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        if request.url.path == "/api/user/recently-visited-courses":
+        if request.method == "POST" and request.url.path == "/api/my-courses":
+            page = json.loads(request.content)["page"]
             return httpx.Response(
                 200,
-                json={"visited_courses": [{"id": 17, "name": "计算机视觉"}]},
+                json={
+                    "courses": (
+                        [
+                            {"id": 17, "name": "计算机视觉"},
+                            {"id": 18, "name": "信号处理"},
+                        ]
+                        if page == 1
+                        else [{"id": 19, "name": "机器学习"}]
+                    ),
+                    "page": page,
+                    "page_size": 100,
+                    "pages": 2,
+                    "total": 3,
+                },
             )
         if request.url.path == "/api/courses/17/activities":
             return httpx.Response(
@@ -46,27 +60,42 @@ async def test_fetch_courses_and_course_activities():
                     ]
                 },
             )
+        if request.url.path == "/api/courses/18/activities":
+            return httpx.Response(
+                200,
+                json={
+                    "activities": [
+                        {
+                            "id": 6,
+                            "title": "滤波实验",
+                            "type": "homework",
+                            "end_time": "2026-10-03 23:59:00",
+                            "late_submission_count": 0,
+                        }
+                    ]
+                },
+            )
+        if request.url.path == "/api/courses/19/activities":
+            return httpx.Response(200, json={"activities": []})
         raise AssertionError(f"unexpected request: {request.url}")
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as session:
         client = EclassClient(session, "https://eclass.example")
-        courses = await client.fetch_courses()
-        activities = await client.fetch_activities(courses[0])
+        events = await client.fetch_homework_events()
 
-    events = [
-        event
-        for activity in activities
-        if (event := activity_to_event(activity, courses[0].name)) is not None
-    ]
-    assert courses == [EclassCourse(id=17, name="计算机视觉")]
-    assert [request.url.path for request in requests] == [
-        "/api/user/recently-visited-courses",
+    course_requests = [request for request in requests if request.url.path == "/api/my-courses"]
+    assert [request.method for request in course_requests] == ["POST", "POST"]
+    assert [json.loads(request.content)["page"] for request in course_requests] == [1, 2]
+    assert {request.url.path for request in requests} == {
+        "/api/my-courses",
         "/api/courses/17/activities",
+        "/api/courses/18/activities",
+        "/api/courses/19/activities",
+    }
+    assert [(event.uid, event.title, event.course) for event in events] == [
+        ("eclass:4", "第三次作业", "计算机视觉"),
+        ("eclass:6", "滤波实验", "信号处理"),
     ]
-    assert len(events) == 1
-    assert events[0].uid == "eclass:4"
-    assert events[0].title == "第三次作业"
-    assert events[0].course == "计算机视觉"
     assert events[0].due_at == datetime(2026, 10, 1, 23, 59, tzinfo=ZoneInfo("Asia/Shanghai"))
 
 

@@ -166,7 +166,7 @@ async def _fetch_eclass(args: argparse.Namespace) -> None:
         matches = [course for course in courses if needle in course.name.casefold()]
         if not matches:
             raise EclassError(
-                f"最近访问课程列表共 {len(courses)} 门，未找到名称包含“{args.course_name}”的课程"
+                f"全部课程列表共 {len(courses)} 门，未找到名称包含“{args.course_name}”的课程"
             )
 
         course_results = []
@@ -189,7 +189,7 @@ async def _fetch_eclass(args: argparse.Namespace) -> None:
 
     events.sort(key=lambda event: event.due_at)
     result = {
-        "course_source": "recently-visited",
+        "course_source": "all-courses",
         "courses_total": len(courses),
         "matched_courses": course_results,
         "events": [
@@ -206,7 +206,7 @@ async def _fetch_eclass(args: argparse.Namespace) -> None:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
 
-    print(f"课程中心课程列表：{len(courses)} 门；匹配课程：{len(matches)} 门")
+    print(f"课程中心全部课程：{len(courses)} 门；匹配课程：{len(matches)} 门")
     for course_result in course_results:
         print(
             f"{course_result['name']}：活动 {course_result['activity_count']} 条，"

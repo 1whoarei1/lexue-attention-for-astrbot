@@ -35,7 +35,7 @@ from lexue_attention.mail_code import MailCodeConfig, MailCodeError, wait_for_ss
 PLUGIN_NAME = "astrbot_plugin_lexue_attention"
 PLUGIN_AUTHOR = "lexue-attention"
 PLUGIN_DESC = "BIT 乐学与课程中心 DDL 查询、同步和定时提醒插件。"
-PLUGIN_VERSION = "1.6.0"
+PLUGIN_VERSION = "1.6.1"
 IMAGE_RENDER_COOLDOWN_MINUTES = 30
 CUSTOM_T2I_IMAGE_TTL_DAYS = 7
 DEFAULT_T2I_ENDPOINT = "astrbot"
@@ -441,7 +441,7 @@ class LexueAttentionPlugin(Star):
             label = "乐学 ICS"
         elif value in {"eclass", "课程中心"}:
             data_source = "eclass"
-            label = "课程中心最近访问课程"
+            label = "课程中心全部课程"
             if not _config_get(self.config, "username") or not _config_get(self.config, "password"):
                 yield event.plain_result("课程中心需要统一认证账号和密码，请先使用 /lexue account 设置。")
                 return
@@ -547,7 +547,7 @@ class LexueAttentionPlugin(Star):
             f"邮箱账号：{'已设置' if config.mail_username else '未设置'}",
             f"邮箱密码：{'已设置' if config.mail_password else '未设置'}",
             f"邮箱自动取码：{'开启' if config.enable_mail_auto_code else '关闭'}",
-            f"数据源：{'课程中心最近访问课程' if config.data_source == 'eclass' else '乐学 ICS'}",
+            f"数据源：{'课程中心全部课程' if config.data_source == 'eclass' else '乐学 ICS'}",
             f"日历订阅：{'已设置' if config.calendar_url else '未设置'}",
             f"持久授权：{'已建立' if config.calendar_url else '未建立'}",
             f"主动推送会话：{'已绑定' if push_session else '未绑定'}",

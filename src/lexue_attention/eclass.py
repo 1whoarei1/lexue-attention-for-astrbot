@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -11,13 +12,15 @@ import httpx
 from .models import DdlEvent
 
 ECLASS_BASE_URL = "https://zy-eclass.bit.edu.cn"
-ECLASS_COURSES_PATH = "/api/user/recently-visited-courses"
+ECLASS_COURSES_PATH = "/api/my-courses"
 ECLASS_ACTIVITIES_PATH = "/api/courses/{course_id}/activities"
+ECLASS_COURSE_PAGE_SIZE = 100
+ECLASS_ACTIVITY_CONCURRENCY = 8
 ECLASS_TZ = ZoneInfo("Asia/Shanghai")
 
 
 class EclassError(RuntimeError):
-    """Raised when the course-center API cannot provide usable data."""
+    """Raised when the course-center API cannot provide complete usable data."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,11 +39,43 @@ class EclassClient:
         self.base_url = base_url.rstrip("/")
 
     async def fetch_courses(self) -> list[EclassCourse]:
-        payload = await self._get_json(ECLASS_COURSES_PATH)
-        raw_courses = payload.get("visited_courses")
-        if not isinstance(raw_courses, list):
-            raise EclassError("课程中心课程列表响应缺少 visited_courses")
+        courses: list[EclassCourse] = []
+        seen_ids: set[int] = set()
+        page = 1
+        while True:
+            payload = await self._post_json(
+                ECLASS_COURSES_PATH,
+                {
+                    "page": page,
+                    "page_size": ECLASS_COURSE_PAGE_SIZE,
+                    "fields": "id,name",
+                    "conditions": {},
+                },
+            )
+            raw_courses = payload.get("courses")
+            if not isinstance(raw_courses, list):
+                raise EclassError("课程中心课程列表响应缺少 courses")
 
+            page_courses = self._parse_courses(raw_courses)
+            added = [course for course in page_courses if course.id not in seen_ids]
+            if raw_courses and not added:
+                raise EclassError("课程中心课程列表分页没有前进，停止读取以避免漏课")
+            courses.extend(added)
+            seen_ids.update(course.id for course in added)
+
+            pages = _positive_int(payload.get("pages"))
+            response_page = _positive_int(payload.get("page")) or page
+            if response_page != page:
+                raise EclassError("课程中心课程列表返回了意外的分页页码")
+            if not raw_courses or (pages is not None and page >= pages):
+                break
+            if pages is None and len(raw_courses) < ECLASS_COURSE_PAGE_SIZE:
+                break
+            page += 1
+        return courses
+
+    @staticmethod
+    def _parse_courses(raw_courses: list[Any]) -> list[EclassCourse]:
         courses: list[EclassCourse] = []
         for raw in raw_courses:
             if not isinstance(raw, dict):
@@ -63,21 +98,51 @@ class EclassClient:
         return [item for item in activities if isinstance(item, dict)]
 
     async def fetch_homework_events(self) -> list[DdlEvent]:
-        events: list[DdlEvent] = []
-        for course in await self.fetch_courses():
-            activities = await self.fetch_activities(course)
-            events.extend(
+        courses = await self.fetch_courses()
+        semaphore = asyncio.Semaphore(ECLASS_ACTIVITY_CONCURRENCY)
+
+        async def fetch_course_events(course: EclassCourse) -> list[DdlEvent]:
+            async with semaphore:
+                activities = await self.fetch_activities(course)
+            return [
                 event
                 for activity in activities
                 if (event := activity_to_event(activity, course.name)) is not None
-            )
+            ]
+
+        results = await asyncio.gather(
+            *(fetch_course_events(course) for course in courses),
+            return_exceptions=True,
+        )
+        failures = [result for result in results if isinstance(result, Exception)]
+        if failures:
+            raise EclassError(
+                f"课程中心有 {len(failures)} 门课程活动读取失败，已中止以避免返回不完整结果"
+            ) from failures[0]
+
+        events: list[DdlEvent] = []
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
+            events.extend(result)
         return events
+
+    async def _post_json(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            response = await self.session.post(self.base_url + path, json=body)
+        except httpx.HTTPError as exc:
+            raise EclassError(f"课程中心请求失败（{path}）：{type(exc).__name__}") from exc
+        return self._parse_json_response(response, path)
 
     async def _get_json(self, path: str) -> dict[str, Any]:
         try:
             response = await self.session.get(self.base_url + path)
         except httpx.HTTPError as exc:
             raise EclassError(f"课程中心请求失败（{path}）：{type(exc).__name__}") from exc
+        return self._parse_json_response(response, path)
+
+    @staticmethod
+    def _parse_json_response(response: httpx.Response, path: str) -> dict[str, Any]:
         if response.is_error:
             raise EclassError(f"课程中心请求失败（{path}）：HTTP {response.status_code}")
         try:
@@ -151,3 +216,11 @@ def parse_eclass_time(value: Any) -> datetime | None:
         except ValueError:
             continue
     return None
+
+
+def _positive_int(value: Any) -> int | None:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None

@@ -4,13 +4,13 @@
 
 当前登录流程基于 `BIT101-Android` 使用的 `BIT-Login v4.0.2`，并适配统一身份认证当前提供的邮箱二次验证：先提交统一认证账号密码，按需向绑定邮箱发送验证码，再建立乐学会话并导出 iCalendar 订阅。订阅地址持久化后，机器人重启和定时同步不需要重复登录。
 
-DDL 数据源可选乐学 ICS 或课程中心。课程中心模式沿用 BIT101-Android PR #24 的接口，登录后读取最近访问课程及其作业；默认仍使用 ICS，已有配置不受影响。
+DDL 数据源可选乐学 ICS 或课程中心。课程中心模式读取课程列表页使用的全部课程接口及各课程作业；默认仍使用 ICS，已有配置不受影响。
 
 ## 功能
 
 - 通过 BIT 统一认证登录乐学。
 - 读取乐学 iCalendar 订阅地址。
-- 读取课程中心最近访问课程中的作业及截止时间。
+- 读取课程中心全部课程中的作业及截止时间。
 - 获取并解析 `.ics` 日历事件。
 - 标准化 DDL 字段：`uid`、`title`、`description`、`course`、`due_at`。
 - 按 UID 保存本地状态，用于识别新增、变更和已提醒记录。
@@ -93,7 +93,7 @@ Copy-Item -Recurse .\astrbot_plugin_lexue_attention <AstrBot>\data\plugins\astrb
 /lexue fetch
 ```
 
-课程中心不需要先执行 `/lexue login`；它会在每次获取时重新登录。若统一认证要求邮箱验证码，插件会自动取码或等待 `/lexue code <验证码>`。`eclass` 数据源使用课程中心“最近访问课程”接口，不保证覆盖未出现在最近访问列表里的课程。
+课程中心不需要先执行 `/lexue login`；它会在每次获取时重新登录。若统一认证要求邮箱验证码，插件会自动取码或等待 `/lexue code <验证码>`。`eclass` 数据源会分页读取课程列表页的全部课程，再获取每门课的作业活动。
 
 ## 主动推送怎么设置
 
@@ -204,7 +204,7 @@ t2i_endpoint = official
 - `/lexue login`：使用新统一认证流程登录；需要时等待邮箱验证码，成功后持久化乐学订阅权限。
 - `/lexue code <验证码>`：提交 `/lexue login` 触发的邮箱验证码，必须在发起登录的同一会话中发送。
 - `/lexue calendar <ics地址>`：保存乐学 iCalendar 订阅地址。
-- `/lexue source <ics|eclass>`：切换乐学 ICS 或课程中心最近访问课程数据源。
+- `/lexue source <ics|eclass>`：切换乐学 ICS 或课程中心全部课程数据源。
 - `/lexue daily <HH:MM>`：设置每日 DDL 推送时间，并开启每日推送。
 - `/lexue interval <分钟>`：设置自动同步间隔，并开启间隔同步，最小 5 分钟。
 - `/lexue fetch`：手动获取当前 DDL 列表，不更新提醒状态。
@@ -237,7 +237,7 @@ t2i_endpoint = official
 - `calendar_url`：乐学 iCalendar 订阅地址。推荐优先使用。
 - `lexue_base_url`：乐学站点地址，默认 `https://lexue.bit.edu.cn`。
 - `auth_method`：登录方式，默认 `android`，对应 BIT-Login v4 密码登录及邮箱二次验证流程；`ticket`、`page` 仅保留作旧流程诊断。
-- `data_source`：DDL 数据源，默认 `ics`；设置为 `eclass` 后读取课程中心最近访问课程的作业。
+- `data_source`：DDL 数据源，默认 `ics`；设置为 `eclass` 后读取课程中心全部课程的作业。
 - `push_session`：主动推送会话。通常由 `/lexue bind` 自动写入。
 - `daily_push_time`：每日 DDL 推送时间，格式为 `HH:MM`。
 - `enable_daily_push`：是否开启每日推送。
@@ -255,7 +255,7 @@ t2i_endpoint = official
 
 - ICS 模式正常情况下直接读取日历订阅，不访问邮箱。
 - ICS 日历订阅失效或返回登录页时，仅自动重新授权一次并更新 `calendar_url`。
-- 课程中心模式每次获取时访问课程列表和活动接口。
+- 课程中心模式每次获取时分页访问全部课程列表，并并发读取课程活动。
 - 二次验证触发后，通过 `mail.bit.edu.cn:993` 以只读 IMAP 方式轮询新邮件，并用 `BODY.PEEK` 获取验证码，不会主动把邮件标记为已读。
 
 在 AstrBot 插件配置页填写 `mail_username`、`mail_password`，然后使用：
@@ -353,7 +353,7 @@ python -m lexue_attention sync --username "your_student_id" --ask-password --ask
 python -m lexue_attention eclass --username "your_student_id" --ask-password --ask-sms-code --course-name "计算机视觉" --json
 ```
 
-AstrBot 插件也可以通过 `/lexue source eclass` 将手动查询、同步和定时推送切换到课程中心数据源；默认的 ICS 数据源保持不变。
+AstrBot 插件也可以通过 `/lexue source eclass` 将手动查询、同步和定时推送切换到课程中心全部课程数据源；默认的 ICS 数据源保持不变。
 
 登录诊断：
 
