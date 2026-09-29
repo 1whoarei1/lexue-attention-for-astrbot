@@ -315,3 +315,51 @@ async def test_sms_code_command_requires_pending_login_in_same_session():
     assert results == ["请在发起 /lexue login 的同一会话中提交验证码。"]
     assert not plugin._pending_sms_code.done()
     plugin._pending_sms_code.cancel()
+
+
+@pytest.mark.asyncio
+async def test_source_switch_is_used_by_followup_fetch(monkeypatch):
+    module = _load_plugin_main()
+    plugin = module.LexueAttentionPlugin.__new__(module.LexueAttentionPlugin)
+    plugin.config = {
+        "username": "student",
+        "password": "secret",
+        "data_source": "ics",
+        "enable_image_mode": False,
+    }
+    plugin._runtime_data_source = None
+    plugin._sync_task = None
+    plugin._daily_task = None
+    plugin._last_error = ""
+    plugin._image_render_disabled_until = None
+    plugin._save_config = lambda: None
+    plugin._restart_background_tasks = lambda: None
+
+    captured = {}
+
+    async def fake_fetch(options):
+        captured["source"] = options.data_source
+        return []
+
+    monkeypatch.setattr(module, "fetch_events", fake_fetch)
+
+    event = types.SimpleNamespace(
+        plain_result=lambda text: text,
+        unified_msg_origin="qq:private:owner",
+    )
+
+    switched = [item async for item in plugin.set_data_source(event, "eclass")]
+    assert switched == ["已切换 DDL 数据源为：课程中心全部课程。"]
+
+    config = plugin._plugin_config()
+    await module.fetch_events(config.fetch_options())
+
+    assert config.data_source == "eclass"
+    assert captured["source"] == "eclass"
+
+
+def test_status_handler_uses_non_conflicting_method_name():
+    module = _load_plugin_main()
+
+    assert hasattr(module.LexueAttentionPlugin, "show_status")
+    assert "status" not in module.LexueAttentionPlugin.__dict__
