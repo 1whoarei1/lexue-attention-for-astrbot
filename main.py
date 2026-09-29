@@ -458,7 +458,7 @@ class LexueAttentionPlugin(Star):
         self._save_config()
         # Re-read through the same path used by fetch/sync so the acknowledgement
         # reflects the effective runtime source rather than only the command input.
-        effective = self._plugin_config().data_source
+        effective = _effective_data_source(self._plugin_config(), self.config, data_source)
         if effective != data_source:
             yield event.plain_result(f"数据源切换失败：期望 {data_source}，当前仍为 {effective}。")
             return
@@ -559,7 +559,7 @@ class LexueAttentionPlugin(Star):
             f"邮箱账号：{'已设置' if config.mail_username else '未设置'}",
             f"邮箱密码：{'已设置' if config.mail_password else '未设置'}",
             f"邮箱自动取码：{'开启' if config.enable_mail_auto_code else '关闭'}",
-            f"数据源：{'课程中心全部课程' if config.data_source == 'eclass' else '乐学 ICS'}",
+            f"数据源：{'课程中心全部课程' if _effective_data_source(config, self.config) == 'eclass' else '乐学 ICS'}",
             f"日历订阅：{'已设置' if config.calendar_url else '未设置'}",
             f"持久授权：{'已建立' if config.calendar_url else '未建立'}",
             f"主动推送会话：{'已绑定' if push_session else '未绑定'}",
@@ -921,6 +921,16 @@ class LexueAttentionPlugin(Star):
         data_dir.mkdir(parents=True, exist_ok=True)
         config = normalize_plugin_config(self.config, data_dir / "state.json")
         runtime_source = getattr(self, "_runtime_data_source", None)
+        # A hot-reloaded AstrBot process can temporarily retain the old
+        # AstrBotPluginConfig class without data_source. Do not crash; attach
+        # the effective source when possible and let callers use the helper
+        # below as a compatibility fallback.
+        if not hasattr(config, "data_source"):
+            source = runtime_source or _normalize_runtime_data_source(_config_get(self.config, "data_source", "ics"))
+            try:
+                object.__setattr__(config, "data_source", source)
+            except (AttributeError, TypeError):
+                pass
         if runtime_source not in {"ics", "eclass"}:
             return config
         # Once the AstrBot config object reflects the requested source, the
@@ -948,6 +958,20 @@ class LexueAttentionPlugin(Star):
         if minutes < 0:
             return "无"
         return f"约 {minutes + 1} 分钟"
+
+
+def _normalize_runtime_data_source(value: Any) -> str:
+    source = str(value or "").strip().casefold()
+    return source if source in {"ics", "eclass"} else "ics"
+
+
+def _effective_data_source(config: Any, raw_config: Any = None, default: str = "ics") -> str:
+    value = getattr(config, "data_source", None)
+    if value is None and raw_config is not None:
+        value = _config_get(raw_config, "data_source", default)
+    if value is None:
+        value = default
+    return _normalize_runtime_data_source(value)
 
 
 def _config_get(config: Any, key: str, default: Any = None) -> Any:
