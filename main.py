@@ -2,6 +2,7 @@ import asyncio
 import re
 import sys
 import uuid
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -318,6 +319,9 @@ class LexueAttentionPlugin(Star):
         self._last_daily_key = ""
         self._last_error = ""
         self._image_render_disabled_until: datetime | None = None
+        # Keeps a command-triggered source switch effective immediately even on
+        # AstrBot versions/config wrappers that expose persistence with a delay.
+        self._runtime_data_source: str | None = None
 
     async def initialize(self) -> None:
         self._restart_background_tasks()
@@ -450,7 +454,15 @@ class LexueAttentionPlugin(Star):
             return
 
         self.config["data_source"] = data_source
+        self._runtime_data_source = data_source
         self._save_config()
+        # Re-read through the same path used by fetch/sync so the acknowledgement
+        # reflects the effective runtime source rather than only the command input.
+        effective = self._plugin_config().data_source
+        if effective != data_source:
+            yield event.plain_result(f"数据源切换失败：期望 {data_source}，当前仍为 {effective}。")
+            return
+        self._restart_background_tasks()
         yield event.plain_result(f"已切换 DDL 数据源为：{label}。")
 
     @filter.permission_type(filter.PermissionType.ADMIN)
@@ -536,8 +548,8 @@ class LexueAttentionPlugin(Star):
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @lexue.command("status", alias={"状态"})
-    async def status(self, event: AstrMessageEvent):
-        """查看插件配置状态。"""
+    async def show_status(self, event: AstrMessageEvent):
+        """查看插件配置状态。避免与 AstrBot/Star 的 status 成员发生命名冲突。"""
         config = self._plugin_config()
         push_session = self._push_session()
         lines = [
@@ -907,7 +919,18 @@ class LexueAttentionPlugin(Star):
     def _plugin_config(self):
         data_dir = Path(get_astrbot_data_path()) / "plugin_data" / PLUGIN_NAME
         data_dir.mkdir(parents=True, exist_ok=True)
-        return normalize_plugin_config(self.config, data_dir / "state.json")
+        config = normalize_plugin_config(self.config, data_dir / "state.json")
+        runtime_source = getattr(self, "_runtime_data_source", None)
+        if runtime_source not in {"ics", "eclass"}:
+            return config
+        # Once the AstrBot config object reflects the requested source, the
+        # temporary override is no longer needed. Until then, fetch/sync must use
+        # the source the administrator just selected instead of silently falling
+        # back to the stale value.
+        if config.data_source == runtime_source:
+            self._runtime_data_source = None
+            return config
+        return replace(config, data_source=runtime_source)
 
     def _push_session(self) -> str:
         return str(_config_get(self.config, "push_session", "") or "").strip()
