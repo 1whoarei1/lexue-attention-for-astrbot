@@ -92,6 +92,7 @@ class BitSsoV4Client:
         *,
         sms_code_callback: SmsCodeCallback | None = None,
         trust_device: bool = False,
+        start_from_service: bool = False,
     ) -> str:
         """Establish the target service session, requesting a code when required."""
 
@@ -99,11 +100,14 @@ class BitSsoV4Client:
         if not username or not password:
             raise AuthError("统一身份认证账号和密码不能为空")
 
-        loaded = await self.session.get(
-            f"{self.base_url}/cas/login",
-            params={"service": service_url},
-            follow_redirects=False,
-        )
+        if start_from_service:
+            loaded = await self.session.get(service_url, follow_redirects=True)
+        else:
+            loaded = await self.session.get(
+                f"{self.base_url}/cas/login",
+                params={"service": service_url},
+                follow_redirects=False,
+            )
         loaded.raise_for_status()
         if loaded.is_redirect:
             return await self._finish_service_redirect(loaded)
@@ -327,7 +331,7 @@ class BitSsoV4Client:
             follow_redirects=False,
             raise_for_status=False,
         )
-        is_cas_login = urlparse(str(response.url)).path.rstrip("/").endswith("/cas/login")
+        is_cas_login = _is_cas_login_url(str(response.url))
         if response.status_code >= 400 and not (
             response.status_code in {400, 401, 403} and is_cas_login
         ):
@@ -342,13 +346,13 @@ class BitSsoV4Client:
         callback_url = urljoin(str(response.url), location)
         callback = await self.session.get(callback_url, follow_redirects=True)
         callback.raise_for_status()
-        if "/cas/login" in str(callback.url) or _looks_like_login_page(callback.text):
+        if _is_cas_login_url(str(callback.url)) or _looks_like_login_page(callback.text):
             raise AuthError("乐学服务回调后仍停留在统一身份认证页面")
         return str(callback.url)
 
     def _raise_if_login_rejected(self, response: httpx.Response, fallback: str) -> None:
         soup = BeautifulSoup(response.text, "html.parser")
-        is_login_url = urlparse(str(response.url)).path.rstrip("/").endswith("/cas/login")
+        is_login_url = _is_cas_login_url(str(response.url))
         login_markup = any(
             marker in response.text
             for marker in (
@@ -804,6 +808,11 @@ def _required_text(soup: BeautifulSoup, selector: str, label: str) -> str:
     if not value:
         raise AuthError(f"BIT SSO page has empty {label}")
     return value
+
+
+def _is_cas_login_url(url: str) -> bool:
+    path = re.sub(r"/{2,}", "/", urlparse(url).path).rstrip("/")
+    return path.endswith("/cas/login")
 
 
 def _looks_like_login_page(html: str) -> bool:

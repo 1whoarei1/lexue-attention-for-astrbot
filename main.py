@@ -34,8 +34,8 @@ from lexue_attention.mail_code import MailCodeConfig, MailCodeError, wait_for_ss
 
 PLUGIN_NAME = "astrbot_plugin_lexue_attention"
 PLUGIN_AUTHOR = "lexue-attention"
-PLUGIN_DESC = "BIT 乐学 DDL 查询、同步和定时提醒插件。"
-PLUGIN_VERSION = "1.5.3"
+PLUGIN_DESC = "BIT 乐学与课程中心 DDL 查询、同步和定时提醒插件。"
+PLUGIN_VERSION = "1.6.0"
 IMAGE_RENDER_COOLDOWN_MINUTES = 30
 CUSTOM_T2I_IMAGE_TTL_DAYS = 7
 DEFAULT_T2I_ENDPOINT = "astrbot"
@@ -338,6 +338,7 @@ class LexueAttentionPlugin(Star):
             "/lexue login 登录统一认证；配置邮箱后可自动取验证码并持久化乐学授权\n"
             "/lexue code <验证码> 提交登录邮箱验证码\n"
             "/lexue calendar <ics地址> 设置乐学日历订阅地址\n"
+            "/lexue source <ics|eclass> 切换 DDL 数据源\n"
             "/lexue daily <HH:MM> 设置每日 DDL 推送时间\n"
             "/lexue interval <分钟> 设置自动同步间隔\n"
             "/lexue fetch 主动获取 DDL 列表\n"
@@ -360,7 +361,7 @@ class LexueAttentionPlugin(Star):
         self.config["username"] = username.strip()
         self.config["password"] = password
         self._save_config()
-        yield event.plain_result("已保存统一认证账号和密码。请在插件配置页填写邮箱账号密码，再发送 /lexue login。")
+        yield event.plain_result("已保存统一认证账号和密码。课程中心数据源可直接使用；ICS 数据源可配置邮箱后发送 /lexue login。")
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @lexue.command("login", alias={"登录", "授权"})
@@ -429,6 +430,28 @@ class LexueAttentionPlugin(Star):
         self.config["calendar_url"] = str(calendar_url).strip()
         self._save_config()
         yield event.plain_result("已保存乐学日历订阅地址。")
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @lexue.command("source", alias={"数据源"})
+    async def set_data_source(self, event: AstrMessageEvent, source: str):
+        """切换乐学 ICS 或课程中心数据源。"""
+        value = source.strip().casefold()
+        if value in {"ics", "日历"}:
+            data_source = "ics"
+            label = "乐学 ICS"
+        elif value in {"eclass", "课程中心"}:
+            data_source = "eclass"
+            label = "课程中心最近访问课程"
+            if not _config_get(self.config, "username") or not _config_get(self.config, "password"):
+                yield event.plain_result("课程中心需要统一认证账号和密码，请先使用 /lexue account 设置。")
+                return
+        else:
+            yield event.plain_result("数据源应为 ics 或 eclass。")
+            return
+
+        self.config["data_source"] = data_source
+        self._save_config()
+        yield event.plain_result(f"已切换 DDL 数据源为：{label}。")
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @lexue.command("daily", alias={"每日"})
@@ -524,6 +547,7 @@ class LexueAttentionPlugin(Star):
             f"邮箱账号：{'已设置' if config.mail_username else '未设置'}",
             f"邮箱密码：{'已设置' if config.mail_password else '未设置'}",
             f"邮箱自动取码：{'开启' if config.enable_mail_auto_code else '关闭'}",
+            f"数据源：{'课程中心最近访问课程' if config.data_source == 'eclass' else '乐学 ICS'}",
             f"日历订阅：{'已设置' if config.calendar_url else '未设置'}",
             f"持久授权：{'已建立' if config.calendar_url else '未建立'}",
             f"主动推送会话：{'已绑定' if push_session else '未绑定'}",

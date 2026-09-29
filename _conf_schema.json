@@ -46,6 +46,13 @@
     "options": ["android", "ticket", "page"],
     "hint": "android 使用 BIT-Login v4 登录及邮箱二次验证；ticket/page 仅用于旧流程诊断。"
   },
+  "data_source": {
+    "description": "DDL 数据源",
+    "type": "string",
+    "default": "ics",
+    "options": ["ics", "eclass"],
+    "hint": "ics 读取乐学日历订阅；eclass 登录课程中心并读取最近访问课程的作业。"
+  },
   "push_session": {
     "description": "主动推送会话",
     "type": "string",

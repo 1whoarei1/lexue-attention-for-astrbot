@@ -317,6 +317,7 @@ class AstrBotPluginConfig:
     calendar_url: str
     lexue_base_url: str
     auth_method: str
+    data_source: str
     state_path: str
     daily_push_time: str
     check_interval_minutes: int
@@ -335,6 +336,7 @@ class AstrBotPluginConfig:
             calendar_url=self.calendar_url,
             lexue_base_url=self.lexue_base_url,
             auth_method=self.auth_method,
+            data_source=self.data_source,
             sms_code_callback=sms_code_callback,
         )
 
@@ -349,6 +351,7 @@ def normalize_plugin_config(raw: Any, state_path: str | Path) -> AstrBotPluginCo
         calendar_url=_get_str(raw, "calendar_url"),
         lexue_base_url=_get_str(raw, "lexue_base_url", DEFAULT_LEXUE_BASE_URL),
         auth_method=_normalize_auth_method(_get_str(raw, "auth_method", "android")),
+        data_source=_normalize_data_source(_get_str(raw, "data_source", "ics")),
         state_path=str(state_path),
         daily_push_time=_get_str(raw, "daily_push_time", "08:30"),
         check_interval_minutes=max(5, _get_int(raw, "check_interval_minutes", 60)),
@@ -367,6 +370,10 @@ def normalize_plugin_config(raw: Any, state_path: str | Path) -> AstrBotPluginCo
 
 
 def validate_fetch_config(config: AstrBotPluginConfig) -> None:
+    if config.data_source == "eclass":
+        if not config.username or not config.password:
+            raise ValueError("课程中心数据源需要 BIT 统一认证账号和密码，请使用 /lexue account 设置。")
+        return
     if config.calendar_url:
         return
     if not config.username:
@@ -600,6 +607,10 @@ def _normalize_auth_method(value: str) -> str:
     if value in {"android", "ticket", "page"}:
         return value
     return "android"
+
+
+def _normalize_data_source(value: str) -> str:
+    return value if value in {"ics", "eclass"} else "ics"
 
 
 def _get(raw: Any, key: str, default: Any = None) -> Any:

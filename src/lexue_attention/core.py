@@ -13,6 +13,7 @@ from .auth import (
     new_session,
 )
 from .config import AppConfig
+from .eclass import ECLASS_BASE_URL, EclassClient
 from .ics import parse_lexue_ics
 from .lexue import LexueClient
 from .models import DdlEvent
@@ -28,6 +29,7 @@ class FetchOptions:
     lexue_base_url: str = "https://lexue.bit.edu.cn"
     auth_method: str = "android"
     sms_code_callback: SmsCodeCallback | None = None
+    data_source: str = "ics"
 
 
 @dataclass(slots=True)
@@ -40,6 +42,23 @@ class SyncResult:
 
 
 async def fetch_events(options: FetchOptions) -> list[DdlEvent]:
+    if options.data_source == "eclass":
+        if not options.username or not options.password:
+            raise ValueError("课程中心数据源需要 BIT 统一认证账号和密码")
+        async with new_session() as session:
+            service_url = ECLASS_BASE_URL + "/user/courses"
+            await BitSsoV4Client(session).login_for_service(
+                options.username,
+                options.password,
+                service_url,
+                sms_code_callback=options.sms_code_callback,
+                start_from_service=True,
+            )
+            return await EclassClient(session).fetch_homework_events()
+
+    if options.data_source != "ics":
+        raise ValueError(f"unsupported data_source: {options.data_source}")
+
     async with new_session() as session:
         client = LexueClient(session=session, base_url=options.lexue_base_url)
 

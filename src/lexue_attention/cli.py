@@ -14,6 +14,7 @@ from .auth import AuthError, BitSsoPageClient, BitSsoTicketClient, BitSsoV4Clien
 from .config import load_config
 from .core import FetchOptions, sync_events
 from .diagnostics import diagnose_login
+from .eclass import ECLASS_BASE_URL, EclassClient, EclassError, activity_to_event
 from .ics import parse_lexue_ics
 from .lexue import LexueClient
 from .reminder import format_reminder
@@ -42,6 +43,16 @@ def main() -> None:
     diagnose.add_argument("--ask-password", action="store_true", help="Prompt for the BIT SSO password without echo.")
     diagnose.add_argument("--lexue-base-url")
 
+    eclass = subparsers.add_parser("eclass", help="Fetch homework from a course-center course.")
+    eclass.add_argument("--config", default="config.toml", help="TOML config path. Defaults to config.toml.")
+    eclass.add_argument("--username", help="BIT SSO username. Defaults to BIT_SSO_USERNAME.")
+    eclass.add_argument("--password", help="BIT SSO password. Prefer --ask-password.")
+    eclass.add_argument("--ask-password", action="store_true", help="Prompt for the BIT SSO password without echo.")
+    eclass.add_argument("--ask-sms-code", action="store_true", help="Prompt for an email second-factor code when required.")
+    eclass.add_argument("--course-name", required=True, help="Only fetch courses whose name contains this text.")
+    eclass.add_argument("--debug-login", action="store_true", help="Print non-sensitive login progress details.")
+    eclass.add_argument("--json", action="store_true", help="Print JSON instead of readable text.")
+
     sync = subparsers.add_parser("sync", help="Fetch events, update state, and print pending notifications.")
     sync.add_argument("--config", default="config.toml", help="TOML config path. Defaults to config.toml.")
     sync.add_argument("--calendar-url", help="Existing Lexue .ics subscription URL.")
@@ -58,6 +69,8 @@ def main() -> None:
         asyncio.run(_fetch(args))
     elif args.command == "diagnose-login":
         asyncio.run(_diagnose_login(args))
+    elif args.command == "eclass":
+        asyncio.run(_fetch_eclass(args))
     elif args.command == "sync":
         asyncio.run(_sync(args))
 
@@ -129,6 +142,78 @@ async def _diagnose_login(args: argparse.Namespace) -> None:
     lexue_base_url = args.lexue_base_url or config.lexue_base_url
     for line in await diagnose_login(username, password, lexue_base_url):
         print(line)
+
+
+async def _fetch_eclass(args: argparse.Namespace) -> None:
+    config = load_config(args.config)
+    username, password = _resolve_credentials(args, config)
+    service_url = ECLASS_BASE_URL + "/user/courses"
+
+    async with new_session() as session:
+        final_url = await BitSsoV4Client(session).login_for_service(
+            username,
+            password,
+            service_url,
+            sms_code_callback=_sms_code_callback(args),
+            start_from_service=True,
+        )
+        if args.debug_login:
+            _debug("course-center login final url: " + _redact_url(final_url))
+
+        client = EclassClient(session)
+        courses = await client.fetch_courses()
+        needle = args.course_name.strip().casefold()
+        matches = [course for course in courses if needle in course.name.casefold()]
+        if not matches:
+            raise EclassError(
+                f"最近访问课程列表共 {len(courses)} 门，未找到名称包含“{args.course_name}”的课程"
+            )
+
+        course_results = []
+        events = []
+        for course in matches:
+            activities = await client.fetch_activities(course)
+            course_events = [
+                event
+                for activity in activities
+                if (event := activity_to_event(activity, course.name)) is not None
+            ]
+            events.extend(course_events)
+            course_results.append(
+                {
+                    "name": course.name,
+                    "activity_count": len(activities),
+                    "homework_count": len(course_events),
+                }
+            )
+
+    events.sort(key=lambda event: event.due_at)
+    result = {
+        "course_source": "recently-visited",
+        "courses_total": len(courses),
+        "matched_courses": course_results,
+        "events": [
+            {
+                "uid": event.uid,
+                "title": event.title,
+                "course": event.course,
+                "due_at": event.due_at.isoformat(),
+            }
+            for event in events
+        ],
+    }
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+
+    print(f"课程中心课程列表：{len(courses)} 门；匹配课程：{len(matches)} 门")
+    for course_result in course_results:
+        print(
+            f"{course_result['name']}：活动 {course_result['activity_count']} 条，"
+            f"识别作业 {course_result['homework_count']} 条"
+        )
+    for event in events:
+        print(f"{event.course} | {event.title} | 截止 {event.due_at.isoformat()}")
 
 
 async def _sync(args: argparse.Namespace) -> None:

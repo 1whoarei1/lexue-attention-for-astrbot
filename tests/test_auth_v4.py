@@ -64,6 +64,60 @@ async def test_v4_password_login_follows_lexue_service_ticket():
 
 
 @pytest.mark.asyncio
+async def test_v4_can_start_from_service_redirect_and_accept_double_slash_login_path():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "GET" and request.url.host == "eclass.example":
+            if request.url.params:
+                return httpx.Response(200, text="course page")
+            return httpx.Response(
+                302,
+                headers={"Location": "https://identity.example/auth/login"},
+            )
+        if request.url.host == "identity.example":
+            return httpx.Response(
+                302,
+                headers={"Location": "https://sso.example/cas//login"},
+            )
+        if request.method == "GET" and request.url.path == "/cas//login":
+            return httpx.Response(
+                200,
+                text=LOGIN_HTML.replace("/cas/login", "/cas//login"),
+            )
+        if "findCaptchaCount" in request.url.path:
+            return httpx.Response(200, json={"code": 200, "data": {"captchaInvisible": False}})
+        if request.method == "POST" and request.url.path == "/cas//login":
+            return httpx.Response(
+                302,
+                headers={"Location": "https://eclass.example/user/courses?ticket=ST-2"},
+            )
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        follow_redirects=True,
+    ) as session:
+        final_url = await BitSsoV4Client(session, "https://sso.example").login_for_service(
+            "student",
+            "password",
+            "https://eclass.example/user/courses",
+            start_from_service=True,
+        )
+
+    assert final_url == "https://eclass.example/user/courses?ticket=ST-2"
+    assert [request.url.path for request in requests] == [
+        "/user/courses",
+        "/auth/login",
+        "/cas//login",
+        "/cas/api/protected/user/findCaptchaCount/student",
+        "/cas//login",
+        "/user/courses",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_v4_second_factor_submits_email_code():
     requests: list[httpx.Request] = []
     login_posts = 0
