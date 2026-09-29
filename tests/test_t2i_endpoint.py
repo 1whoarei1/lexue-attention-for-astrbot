@@ -363,3 +363,11 @@ def test_status_handler_uses_non_conflicting_method_name():
 
     assert hasattr(module.LexueAttentionPlugin, "show_status")
     assert "status" not in module.LexueAttentionPlugin.__dict__
+
+
+def test_effective_data_source_supports_stale_config_without_field():
+    module = _load_plugin_main()
+    stale = types.SimpleNamespace(username="student")
+
+    assert module._effective_data_source(stale, {"data_source": "eclass"}) == "eclass"
+    assert module._effective_data_source(stale, {"data_source": "ics"}) == "ics"
