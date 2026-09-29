@@ -42,23 +42,35 @@ class SyncResult:
 
 
 async def fetch_events(options: FetchOptions) -> list[DdlEvent]:
+    if options.data_source == "ics":
+        return await _fetch_ics_events(options)
     if options.data_source == "eclass":
+        return await _fetch_eclass_events(options)
+    if options.data_source == "hybrid":
         if not options.username or not options.password:
-            raise ValueError("课程中心数据源需要 BIT 统一认证账号和密码")
-        async with new_session() as session:
-            service_url = ECLASS_BASE_URL + "/user/courses"
-            await BitSsoV4Client(session).login_for_service(
-                options.username,
-                options.password,
-                service_url,
-                sms_code_callback=options.sms_code_callback,
-                start_from_service=True,
-            )
-            return await EclassClient(session).fetch_homework_events()
+            raise ValueError("混合数据源需要 BIT 统一认证账号和密码")
+        ics_events = await _fetch_ics_events(options)
+        eclass_events = await _fetch_eclass_events(options)
+        return sorted([*ics_events, *eclass_events], key=lambda event: event.due_at)
+    raise ValueError(f"unsupported data_source: {options.data_source}")
 
-    if options.data_source != "ics":
-        raise ValueError(f"unsupported data_source: {options.data_source}")
 
+async def _fetch_eclass_events(options: FetchOptions) -> list[DdlEvent]:
+    if not options.username or not options.password:
+        raise ValueError("课程中心数据源需要 BIT 统一认证账号和密码")
+    async with new_session() as session:
+        service_url = ECLASS_BASE_URL + "/user/courses"
+        await BitSsoV4Client(session).login_for_service(
+            options.username,
+            options.password,
+            service_url,
+            sms_code_callback=options.sms_code_callback,
+            start_from_service=True,
+        )
+        return await EclassClient(session).fetch_homework_events()
+
+
+async def _fetch_ics_events(options: FetchOptions) -> list[DdlEvent]:
     async with new_session() as session:
         client = LexueClient(session=session, base_url=options.lexue_base_url)
 

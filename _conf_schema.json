@@ -32,7 +32,7 @@
     "description": "乐学 iCalendar 订阅地址",
     "type": "text",
     "default": "",
-    "hint": "如果填写该项，插件会直接读取日历订阅，不需要账号密码。"
+    "hint": "ICS 模式可直接读取日历订阅，不需要账号密码；混合模式还需要账号密码读取课程中心。"
   },
   "lexue_base_url": {
     "description": "乐学站点地址",
@@ -50,8 +50,8 @@
     "description": "DDL 数据源",
     "type": "string",
     "default": "ics",
-    "options": ["ics", "eclass"],
-    "hint": "ics 读取乐学日历订阅；eclass 登录课程中心并读取全部课程的作业。"
+    "options": ["ics", "eclass", "hybrid"],
+    "hint": "ics 读取乐学日历订阅；eclass 登录课程中心并读取全部课程的作业；hybrid 合并两者的 DDL，需要统一认证账号和密码。"
   },
   "push_session": {
     "description": "主动推送会话",

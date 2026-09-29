@@ -62,5 +62,6 @@ def format_reminder(event: DdlEvent, now: datetime) -> str:
         hours, minutes = divmod(rem, 60)
         remaining = f"已过期 {days} 天 {hours} 小时 {minutes} 分钟" if days else f"已过期 {hours} 小时 {minutes} 分钟"
 
+    source = "课程中心" if event.source == "eclass" else "乐学"
     course = f"[{event.course}] " if event.course else ""
-    return f"{course}{event.title}\nDDL: {event.due_at:%Y-%m-%d %H:%M}\n{remaining}"
+    return f"[{source}] {course}{event.title}\nDDL: {event.due_at:%Y-%m-%d %H:%M}\n{remaining}"

@@ -35,8 +35,8 @@ from lexue_attention.mail_code import MailCodeConfig, MailCodeError, wait_for_ss
 
 PLUGIN_NAME = "astrbot_plugin_lexue_attention"
 PLUGIN_AUTHOR = "lexue-attention"
-PLUGIN_DESC = "BIT 乐学与课程中心 DDL 查询、同步和定时提醒插件。"
-PLUGIN_VERSION = "1.6.1"
+PLUGIN_DESC = "BIT 乐学与课程中心 DDL 查询、混合展示、同步和定时提醒插件。"
+PLUGIN_VERSION = "1.7.0"
 IMAGE_RENDER_COOLDOWN_MINUTES = 30
 CUSTOM_T2I_IMAGE_TTL_DAYS = 7
 DEFAULT_T2I_ENDPOINT = "astrbot"
@@ -188,6 +188,17 @@ DDL_CARD_TEMPLATE = r"""
       font-weight: 700;
       overflow-wrap: anywhere;
     }
+
+    .source {
+      display: inline-flex;
+      margin-right: 6px;
+      padding: 3px 8px;
+      border-radius: 5px;
+      background: #e8eefc;
+      color: #244599;
+      font-size: 13px;
+      font-weight: 700;
+    }
     .event-title {
       margin-top: 9px;
       font-size: 22px;
@@ -272,6 +283,7 @@ DDL_CARD_TEMPLATE = r"""
         {% for item in events %}
         <article class="event {{ item.tone|e }}">
           <div>
+            <span class="source">{{ item.source|e }}</span>
             {% if item.course %}
             <div class="course">{{ item.course|e }}</div>
             {% endif %}
@@ -342,7 +354,7 @@ class LexueAttentionPlugin(Star):
             "/lexue login 登录统一认证；配置邮箱后可自动取验证码并持久化乐学授权\n"
             "/lexue code <验证码> 提交登录邮箱验证码\n"
             "/lexue calendar <ics地址> 设置乐学日历订阅地址\n"
-            "/lexue source <ics|eclass> 切换 DDL 数据源\n"
+            "/lexue source <ics|eclass|hybrid> 切换 DDL 数据源\n"
             "/lexue daily <HH:MM> 设置每日 DDL 推送时间\n"
             "/lexue interval <分钟> 设置自动同步间隔\n"
             "/lexue fetch 主动获取 DDL 列表\n"
@@ -438,7 +450,7 @@ class LexueAttentionPlugin(Star):
     @filter.permission_type(filter.PermissionType.ADMIN)
     @lexue.command("source", alias={"数据源"})
     async def set_data_source(self, event: AstrMessageEvent, source: str):
-        """切换乐学 ICS 或课程中心数据源。"""
+        """切换乐学 ICS、课程中心或混合数据源。"""
         value = source.strip().casefold()
         if value in {"ics", "日历"}:
             data_source = "ics"
@@ -446,11 +458,17 @@ class LexueAttentionPlugin(Star):
         elif value in {"eclass", "课程中心"}:
             data_source = "eclass"
             label = "课程中心全部课程"
-            if not _config_get(self.config, "username") or not _config_get(self.config, "password"):
-                yield event.plain_result("课程中心需要统一认证账号和密码，请先使用 /lexue account 设置。")
-                return
+        elif value in {"hybrid", "混合"}:
+            data_source = "hybrid"
+            label = "混合（乐学 ICS + 课程中心）"
         else:
-            yield event.plain_result("数据源应为 ics 或 eclass。")
+            yield event.plain_result("数据源应为 ics、eclass 或 hybrid。")
+            return
+
+        if data_source in {"eclass", "hybrid"} and (
+            not _config_get(self.config, "username") or not _config_get(self.config, "password")
+        ):
+            yield event.plain_result("课程中心需要统一认证账号和密码，请先使用 /lexue account 设置。")
             return
 
         self.config["data_source"] = data_source
@@ -559,7 +577,7 @@ class LexueAttentionPlugin(Star):
             f"邮箱账号：{'已设置' if config.mail_username else '未设置'}",
             f"邮箱密码：{'已设置' if config.mail_password else '未设置'}",
             f"邮箱自动取码：{'开启' if config.enable_mail_auto_code else '关闭'}",
-            f"数据源：{'课程中心全部课程' if _effective_data_source(config, self.config) == 'eclass' else '乐学 ICS'}",
+            f"数据源：{_data_source_label(_effective_data_source(config, self.config))}",
             f"日历订阅：{'已设置' if config.calendar_url else '未设置'}",
             f"持久授权：{'已建立' if config.calendar_url else '未建立'}",
             f"主动推送会话：{'已绑定' if push_session else '未绑定'}",
@@ -931,7 +949,7 @@ class LexueAttentionPlugin(Star):
                 object.__setattr__(config, "data_source", source)
             except (AttributeError, TypeError):
                 pass
-        if runtime_source not in {"ics", "eclass"}:
+        if runtime_source not in {"ics", "eclass", "hybrid"}:
             return config
         # Once the AstrBot config object reflects the requested source, the
         # temporary override is no longer needed. Until then, fetch/sync must use
@@ -962,7 +980,15 @@ class LexueAttentionPlugin(Star):
 
 def _normalize_runtime_data_source(value: Any) -> str:
     source = str(value or "").strip().casefold()
-    return source if source in {"ics", "eclass"} else "ics"
+    return source if source in {"ics", "eclass", "hybrid"} else "ics"
+
+
+def _data_source_label(source: str) -> str:
+    return {
+        "ics": "乐学 ICS",
+        "eclass": "课程中心全部课程",
+        "hybrid": "混合（乐学 ICS + 课程中心）",
+    }[source]
 
 
 def _effective_data_source(config: Any, raw_config: Any = None, default: str = "ics") -> str:
@@ -1079,6 +1105,7 @@ def _event_card(event, now: datetime) -> dict[str, str]:
     return {
         "title": _clean_title(event.title),
         "course": _clean_course(event.course),
+        "source": "课程中心" if event.source == "eclass" else "乐学",
         "due_date": due_at.strftime("%m 月 %d 日"),
         "due_time": due_at.strftime("%H:%M"),
         "weekday": _weekday(due_at),

@@ -6,9 +6,9 @@ from datetime import datetime, timezone
 
 @dataclass(frozen=True, slots=True)
 class DdlEvent:
-    """A normalized Lexue DDL event.
+    """A normalized DDL event.
 
-    Field names follow the BIT101-Android model:
+    ICS field names follow the BIT101-Android model:
     UID -> uid, SUMMARY -> title, DESCRIPTION -> description,
     CATEGORIES -> course, DTSTART -> due_at.
     """
@@ -18,10 +18,11 @@ class DdlEvent:
     description: str
     course: str
     due_at: datetime
+    source: str = "ics"
 
     @property
     def identity_hash(self) -> str:
-        """Stable content key used to detect changed Lexue events."""
+        """Stable content key used to detect changed events."""
 
         normalized_due = self.due_at.astimezone(timezone.utc).isoformat()
         return "\n".join(

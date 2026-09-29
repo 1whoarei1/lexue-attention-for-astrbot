@@ -370,7 +370,7 @@ def normalize_plugin_config(raw: Any, state_path: str | Path) -> AstrBotPluginCo
 
 
 def validate_fetch_config(config: AstrBotPluginConfig) -> None:
-    if config.data_source == "eclass":
+    if config.data_source in {"eclass", "hybrid"}:
         if not config.username or not config.password:
             raise ValueError("课程中心数据源需要 BIT 统一认证账号和密码，请使用 /lexue account 设置。")
         return
@@ -415,9 +415,10 @@ def format_event_list(
     lines = [title]
     for index, event in enumerate(sorted_events[:limit], start=1):
         card = _event_card(event, now)
+        source = f"[{card['source']}] "
         course = f"[{card['course']}] " if card["course"] else ""
         lines.append(
-            f"{index}. {course}{card['title']}\n"
+            f"{index}. {source}{course}{card['title']}\n"
             f"   DDL: {card['due_full']} · {card['status_label']}\n"
             f"   {card['remaining']}"
         )
@@ -520,6 +521,7 @@ def _event_card(event: DdlEvent, now: datetime) -> dict[str, str]:
     return {
         "title": _clean_title(event.title),
         "course": _clean_course(event.course),
+        "source": "课程中心" if event.source == "eclass" else "乐学",
         "due_full": due_at.strftime("%Y-%m-%d %H:%M"),
         "due_date": due_at.strftime("%m 月 %d 日"),
         "due_time": due_at.strftime("%H:%M"),
@@ -610,7 +612,7 @@ def _normalize_auth_method(value: str) -> str:
 
 
 def _normalize_data_source(value: str) -> str:
-    return value if value in {"ics", "eclass"} else "ics"
+    return value if value in {"ics", "eclass", "hybrid"} else "ics"
 
 
 def _get(raw: Any, key: str, default: Any = None) -> Any:

@@ -185,6 +185,7 @@ def activity_to_event(activity: dict[str, Any], course_name: str) -> DdlEvent | 
         description="",
         course=course_name,
         due_at=deadline,
+        source="eclass",
     )
 
 
